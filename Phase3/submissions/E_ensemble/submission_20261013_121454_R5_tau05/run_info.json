@@ -1,0 +1,10 @@
+{
+ "name": "R5_tau05",
+ "runs": [
+  "C:\\kaggle\\working\\cs781\\phase3\\runs\\R5_D_prefix\\D_d560_prefix_w_dca8c6"
+ ],
+ "dev_macro_f1_all": 0.4000530171305123,
+ "dev_macro_f1_present": 0.47278992933606,
+ "tau": 0.5,
+ "decoding": "argmax of averaged CRF marginals - 0.5 * log prior"
+}

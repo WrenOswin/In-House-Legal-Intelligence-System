@@ -1,0 +1,200 @@
+Phase 7
+
+Prior Case Retrieval - 3 Nov to 7 Nov 2026
+
+
+==========================================================================================
+DATA (checked 2026-10-27)
+==========================================================================================
+Local copy: C:\kaggle\working\cs781\hf_data\Phase_7_PCR (dataset snapshot 93b0059b, last modified 2026-10-19).
+The first local copy had only Train/train_candidates.json and Test/*. On 2026-10-27 the missing files were
+downloaded from Hugging Face: Train/train.json, Dev/dev.json, Dev/dev_candidates.json. The three files already
+present are byte-identical to the Hugging Face versions.
+
+  File                        docs   content
+  Train/train.json             827   queries: text (list of sentences) + relevant_candidates (list of ids)
+  Train/train_candidates.json 4,320  candidate pool for train queries (text only)
+  Dev/dev.json                 118   queries + relevant_candidates
+  Dev/dev_candidates.json     1,023  candidate pool for dev queries
+  Test/test.json               237   queries, text only (no labels - no leak this phase)
+  Test/test_candidates.json   1,727  candidate pool for test queries
+
+- Docs are long: median ~26k chars per query, ~21-23k per candidate (~5-6k BPE tokens), like Phase 4.
+- Relevant candidates per query: train median 4 / mean 6.4 (min 0, max 52); dev median 5 / mean 8.3 (1-92).
+  Some train queries have 0 relevant candidates -> skip them in contrastive training.
+- All relevant ids lie inside their own split's candidate pool (train 5,308/5,308, dev 973/973).
+- Query ids don't overlap between splits. Candidate pools share documents (train&test 740, dev&test 220,
+  train&dev 436) - expected for a shared case corpus, not a leak.
+- 1 test query has the same text as a train query (different id). Minor; don't exploit it.
+- Dev (118 queries / 1,023 candidates) is the validation set.
+
+Time estimate (from Phase 4-6 throughput): encoding the test queries + candidates takes ~3-6 min per model
+(140M ~55k tok/s, 58M ~90k tok/s forward-only); scoring 237 x 1,727 pairs < 1 min; contrastive training
+~45 min - 3 h per run -> ~1.5-3 h per submission, ~10-15 GPU-hours for the 6 required.
+
+
+==========================================================================================
+TASK RULES (capstone doc section 13)
+==========================================================================================
+Output: prediction.json = {query_id: [exactly 7 unique candidate ids of the test pool, best first]} for all
+237 test queries, zipped. Metric: micro-F1@7 (primary), micro-P@7, micro-R@7; gold sets are not truncated.
+Each split's queries must be ranked against that split's own pool only.
+>= 4 substantially different experiments: >= 3 different fine-tuning/PEFT techniques (LoRMA compulsory) +
+>= 1 knowledge distillation (larger teacher -> smaller student). Allowed technique list (13.2.1): full FT,
+partial FT, QLoRA, LoRMA, prefix tuning, prompt tuning, IA3, KD - plain LoRA / adapters are NOT on it.
+Pooling / similarity / ranking objective choices don't count as techniques. Minimum 6 submissions (README;
+doc section 6.5 says 4 - aim for 6). Phase 7 window 3-7 Nov, Codabench takes 15-30 min per submission.
+
+
+==========================================================================================
+2026-10-27  SETUP, DATA CHECKS AND BASELINES
+==========================================================================================
+Code: Phase7\src (backbone.py, bpe.py, models_*.py, peft.py copied unchanged from Phase5\src)
+  pcr.py       data (splits.pkl / meta.json / memory-mapped tokens), chunking, BM25 (from scratch, scipy sparse),
+               ranking (self excluded), micro-F1@7, submission writer + format checks
+  model.py     ChunkEncoder: backbone -> mean-pooled 512-token chunk vectors -> linear proj (identity init) ->
+               unit vectors; scores "doc" (cosine of mean vectors) and "maxsim" (mean over query chunks of the
+               best candidate chunk)
+  zeroshot.py  frozen Phase-1 backbone as a retriever (no training)
+  train.py     contrastive training driver; run.py CLI; run_queue.py P1-P6
+Work dir: C:\kaggle\working\cs781\phase7\{cache, runs\<exp>\<run_id>, logs}. Python: the .venv.
+
+Data checks:
+- EVERY query is also a document of its own candidate pool (same id, same text: dev 118/118) -> a query must
+  never retrieve itself; pcr.rank() masks it. No query is its own gold.
+- 10 train queries have no gold -> 817 usable train queries. 1,029 of the 5,308 train gold ids are other train
+  queries (dev: 19 / 973).
+- Shared candidates between pools have identical texts (train & test: 740 / 740).
+- Masks: <NAME> 4 BPE tokens, <ORG> 4, <CITATION> 3 -> mapped to the single tokens X, Y, citation.
+  <CITATION> marks where the cited prior cases were removed (3,180 in the first 100 queries of each split, ~11 per query).
+- Tokens (both tokenizers nearly the same): train pool 32.4M, dev 10.4M, test 14.4M; median 4.3-4.8k tokens
+  per case, p90 15-20k; 72-76% of cases fit in 16 chunks of 512.
+- Best possible dev F1@7 (oracle) = 0.618 (many queries have < 7 or > 7 gold).
+
+BM25 on dev (k1, b, terms) -> F1@7 (R@20):
+  1.2 0.75  words                      0.0945
+  1.5 0.75  words                      0.1067
+  0.9 0.40  words                      0.0367
+  1.2 0.75  words + bigrams            0.3013 (0.384)
+  1.2 0.75  bigrams only               0.3858 (0.524)
+  1.2 0.75  words + bi + trigrams      0.3613
+  1.2 0.75  trigrams only              0.4269 (0.578)
+  1.2 0.75  4-grams only               0.4158
+  1.2 0.75  5-grams only               0.3947
+  2.0 0.75  trigrams only              0.4291
+  1.2 1.00  trigrams only              0.4325 (0.581)   <- used (hard negatives + fusion)
+  Single words are nearly useless (long queries match everything); exact PHRASES are the relevance signal
+  (queries quote / paraphrase passages and statute text of the cases they cite).
+
+Frozen Phase-1 A_d768 (no training), 16 chunks/case, dev (1,023 cases encoded in 54 s):
+  doc vector   F1@7 0.3024 (R@20 0.450) | fused z(BM25) + w z(model): best w=0.1 -> 0.4391
+  maxsim       F1@7 0.3091 (R@20 0.475) | fused best w=0.1 -> 0.4447
+  -> the untrained Phase-1 LM is already far better than word BM25 and adds +0.012 on top of trigram BM25.
+
+Training design (train.py docstring has the details):
+  bi-encoder, maxsim score, tau 0.05; per step 16 train queries x (1 random gold + 1 BM25-trigram hard
+  negative from the top 30), multi-positive InfoNCE over all in-batch candidates; chunk selection by BPE-trigram
+  overlap (4 chunks per case in training, 16 evenly spaced at inference); GradCache (two passes, exact because
+  dropout is 0); 400 steps; dev evaluated every 100 steps; checkpoint = best fused dev F1@7. Submission =
+  z(BM25) + w * z(model) with w picked on dev (the model-alone ranking is logged too).
+  KD (P5): (1-a) InfoNCE + a KL(teacher in-batch distribution || student), teacher = P1's full train-pool maxsim
+  scores.
+Smoke test (A_d560 full, 20 steps, unthrottled): 6 s/step, 22k tok/s, 1.33 GB peak VRAM; dev encode 46 s.
+
+Planned runs (run_queue.py):
+  P1 A d768 140M  LoRMA r=8 (compulsory, KD teacher)
+  P2 D 54M        partial FT (top 4/8 blocks)
+  P3 C 58M        IA3
+  P4 B enc 42M    full FT
+  P5 A d560 58M   full FT + KD from P1
+  P6 A d560 58M   full FT, no teacher (KD baseline) - run first as the pilot (started 2026-10-27 ~14:15)
+
+Lexical fusion check (dev F1@7, z-scored sums): trigrams 0.4325 | bi+tri 0.4191 | tri+4 0.4314 | bi+tri+4
+0.4280 -> trigram BM25 alone stays the lexical component.
+
+
+==========================================================================================
+RUNS
+==========================================================================================
+P6 A d560 58M full FT, no teacher (run P6_A_full_noKD/A_d560_full_6926e7) - 2026-10-27 14:13-14:59
+  dev F1@7 every 100 steps, model alone / fused (w):  0.3246 / 0.4503 (0.2) *best | 0.3246 / 0.4458 (0.15) |
+                                                       0.3302 / 0.4469 (0.1)  | 0.3357 / 0.4458 (0.15)
+  train loss 1.51 (step 80) -> 0.71 (step 400): fits train much faster than dev improves (817 queries).
+  best = step 100: model alone F1@7 0.3246 (P 0.354, R 0.300, R@20 0.452); fused w=0.2 F1@7 0.4503
+  (P 0.490, R 0.416, R@20 0.610) vs BM25 0.4325 -> +0.018 from the model.
+  train 42.7 min, 29.3k tok/s (duty 0.6), peak VRAM 1.33 GB, dev encode 67 s, test encode 111 s.
+  submission: Phase7\submissions\P6_A_full_noKD\submission_20261027_145852_A_d560_full_6926e7\submission.zip
+  (fused w=0.2) - format checked: 237 queries, 7 unique pool ids each, no self-retrieval.
+  Note: dev has only 118 queries -> differences < ~0.02 are noise; checkpoint/w selection on dev is optimistic.
+Queue P1 P2 P3 P4 P5 started 2026-10-27 14:59 (log C:\kaggle\working\cs781\phase7\logs\queue_P1-P5.log),
+all finished 18:18. Same recipe for every run (400 steps, 16 queries/step, maxsim, tau 0.05, duty 0.6).
+
+Dev F1@7 at steps 100 / 200 / 300 / 400, model alone | fused (best w):
+  P1 A d768 LoRMA   0.3446 0.3591 0.3535 0.3580 | 0.4536 0.4569 0.4558 0.4569
+  P2 D partial      0.3146 0.3102 0.3357 0.3335 | 0.4503 0.4447 0.4469 0.4480
+  P3 C IA3          0.2902 0.3013 0.3024 0.3102 | 0.4458 0.4480 0.4447 0.4469
+  P4 B full         0.2435 0.2601 0.2635 0.2624 | 0.4425 0.4425 0.4491 0.4480
+  P5 A d560 KD      0.3435 0.3413 0.3469 0.3502 | 0.4514 0.4547 0.4569 0.4558
+  P6 A d560 full    0.3246 0.3246 0.3302 0.3357 | 0.4503 0.4458 0.4469 0.4458
+
+==========================================================================================
+PHASE 7 SUMMARY (2026-10-27 18:20) - 6 validated submission zips (Codabench test scores: see end of log)
+==========================================================================================
+  Submission       Arch / technique                       params (trainable)  dev F1@7 alone  fused (w)  R@20 fused
+  P1_A_lorma       A d768, LoRMA+ r=8 (KD teacher)        142.65M (2.51M)     0.3591          0.4569 (0.15)  0.612
+  P5_KD            A d560, full FT + KD from P1           58.38M (58.38M)     0.3469          0.4569 (0.15)  0.608
+  P2_D_partial     D d560, partial FT top 4/8 blocks      54.62M (18.51M)     0.3146          0.4503 (0.15)  0.602
+  P6_A_full_noKD   A d560, full FT, no teacher (KD base)  58.38M (58.38M)     0.3246          0.4503 (0.2)   0.610
+  P4_B_full        B enc d512, full FT                    41.82M (41.82M)     0.2635          0.4491 (0.15)  0.599
+  P3_C_ia3         C d560, IA3                            58.41M (0.34M)      0.3013          0.4480 (0.1)   0.599
+  references: BM25 word trigrams 0.4325 | frozen Phase-1 A d768 alone 0.3091, fused 0.4447 | oracle 0.618
+  ("alone" = the checkpoint chosen by fused F1; P1's best alone score over all checkpoints 0.3591, P5 0.3502)
+
+  Cost:            train min  peak VRAM  test encode
+    P1 A d768 LoRMA   52.4     3.37 GB    173 s
+    P5 KD             42.4     1.32 GB    109 s   (+ 422 s once for the teacher's train-pool scores)
+    P6 full           42.7     1.33 GB    111 s
+    P2 D partial      30.0     1.49 GB    119 s
+    P3 C IA3          36.9     1.98 GB    121 s
+    P4 B full         14.8     1.55 GB     39 s
+  Submission paths: Phase7\submissions\<exp>\submission_<stamp>_<run_id>\submission.zip
+    P1 submission_20261027_155621_A_d768_lorma_a4ffaa   P2 submission_20261027_162934_D_d560_partial_e92733
+    P3 submission_20261027_170945_C_d560_ia3_a16b50     P4 submission_20261027_172539_B_d512_full_05685b
+    P5 submission_20261027_181757_A_d560_full_kd_127552 P6 submission_20261027_145852_A_d560_full_6926e7
+  All 6 checked: 237 queries, 7 unique test-pool ids each, no self-retrieval. They are NOT identical: mean
+  top-7 overlap between two submissions 0.87-0.91, with plain BM25 0.82-0.88.
+  Requirements: all four architectures; LoRMA (compulsory) + partial FT + IA3 + full FT + KD -> met.
+
+Observations:
+- Every fine-tuned model beats its frozen self alone (A d768 0.309 -> 0.359); ranking A > D > C > B as in
+  earlier phases. Fused gains over BM25 are small (+0.016 to +0.024) and within dev noise (118 queries).
+- KD: the 58M student (0.3469 alone / 0.4569 fused) almost matches the 140M LoRMA teacher (0.3591 / 0.4569) and
+  beats the same student without a teacher (0.3246 / 0.4503) - same pattern as Phases 4-5; 39% of the memory,
+  0.63x the test encode time.
+- IA3 trains only 0.34M parameters (0.6%) and still gains over the frozen model, but least of the A/C/D runs.
+- The model scores are most useful as a re-weighting of BM25 (best w 0.1-0.2): exact-phrase overlap carries
+  most of the relevance; the model mainly lifts recall in the top 20 (BM25 R@20 0.581 -> 0.60-0.61).
+- Ensembles of model scores (P1+P5, P1+P5+P6, all six) fused with BM25: 0.4547-0.4558, no gain over P1 -> not
+  submitted.
+
+==========================================================================================
+CODABENCH TEST SCORES (recorded 2026-11-04) - all 6 submissions uploaded and scored
+==========================================================================================
+  Submission       Arch / technique                       dev F1@7 fused  Codabench test F1@7  test - dev
+  P1_A_lorma       A d768, LoRMA+ r=8 (KD teacher)        0.4569          0.4312 <- best        -0.026
+  P3_C_ia3         C d560, IA3                            0.4480          0.4300                -0.018
+  P5_KD            A d560, full FT + KD from P1           0.4569          0.4300                -0.027
+  P4_B_full        B enc d512, full FT                    0.4491          0.4294                -0.020
+  P6_A_full_noKD   A d560, full FT, no teacher (KD base)  0.4503          0.4276                -0.023
+  P2_D_partial     D d560, partial FT top 4/8 blocks      0.4503          0.4229                -0.027
+
+Observations (test):
+- All six land in 0.4229-0.4312 (spread 0.008), every one 0.018-0.027 below its dev score. The w and the
+  checkpoint were both picked on the same 118 dev queries, so the dev numbers are optimistic.
+- P1 (LoRMA teacher) is best on test as on dev. Beyond that the dev order does not carry over: P3 IA3 was last
+  on dev and ties for 2nd on test; P2 partial was 3rd on dev and is last on test. Differences this small are
+  noise at 237 test queries.
+- KD still helps a little on test: student P5 0.4300 vs the same model without a teacher P6 0.4276 (+0.0024),
+  and the student is 0.0012 behind its 140M teacher.
+- The test scores sit right at the dev BM25-only level (0.4325), so the model's gain over BM25 (+0.02 on dev)
+  is probably much smaller on test. BM25 alone was not submitted, so this cannot be checked directly.

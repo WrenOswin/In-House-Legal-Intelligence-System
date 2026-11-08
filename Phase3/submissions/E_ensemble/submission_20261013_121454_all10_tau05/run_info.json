@@ -1,0 +1,19 @@
+{
+ "name": "all10_tau05",
+ "runs": [
+  "C:\\kaggle\\working\\cs781\\phase3\\runs\\R1_A_lorma\\A_d768_lorma_w_ba1538",
+  "C:\\kaggle\\working\\cs781\\phase3\\runs\\R1_A_lorma\\A_d768_lorma_w_bc8045",
+  "C:\\kaggle\\working\\cs781\\phase3\\runs\\R2_A_full\\A_d768_full_w_4ef131",
+  "C:\\kaggle\\working\\cs781\\phase3\\runs\\R3_B_rslora\\B_d512_rslora_w_2d2f72",
+  "C:\\kaggle\\working\\cs781\\phase3\\runs\\R4_C_ia3\\C_d560_ia3_w_eb3e89",
+  "C:\\kaggle\\working\\cs781\\phase3\\runs\\R5_D_prefix\\D_d560_prefix_w_dca8c6",
+  "C:\\kaggle\\working\\cs781\\phase3\\runs\\R6_KD\\A_d560_full_w_kd_86811a",
+  "C:\\kaggle\\working\\cs781\\phase3\\runs\\R7_D_lorma\\D_d560_lorma_w_5232ad",
+  "C:\\kaggle\\working\\cs781\\phase3\\runs\\R7_D_lorma\\D_d560_lorma_w_c8f1dd",
+  "C:\\kaggle\\working\\cs781\\phase3\\runs\\R8_D_prefix_long\\D_d560_prefix_w_b8d31c"
+ ],
+ "dev_macro_f1_all": 0.4835649040762556,
+ "dev_macro_f1_present": 0.571485795726484,
+ "tau": 0.5,
+ "decoding": "argmax of averaged CRF marginals - 0.5 * log prior"
+}

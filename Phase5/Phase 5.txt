@@ -1,0 +1,287 @@
+Phase 5
+
+Legal Statute Identification (LSI) - 22 to 26 Oct 2026 (deadline 26 Oct 23:59)
+
+
+==========================================================================================
+PHASE 5 SUMMARY - multi-label statute IDs per case document, macro-F1
+==========================================================================================
+Task: predict the set of applicable statute IDs (0-99) for each test document.
+Metrics: macro-F1 (primary), micro-F1, subset accuracy. Output: [{"id": ..., "pred": [int, ...]}, ...],
+one object per test doc, unique valid IDs only.
+Rules (capstone doc section 11.2): start from the Phase-1 models (ALL FOUR architectures); >= 4 substantially
+different experiments: >= 3 different fine-tuning/PEFT techniques (LoRMA compulsory) + >= 1 knowledge
+distillation (larger teacher -> smaller student). Minimum 6 valid submissions (README).
+STATUS 2026-10-27: PHASE 5 COMPLETE - 9 submissions uploaded to Codabench (scores below, reported by the user
+2026-10-27). Requirements met by K1-K5 (all four architectures; LoRMA, partial FT, adapters, full FT + KD).
+Best on test: E K2+K5+K6+K7 ensemble 0.4035 (best single model K6 0.4033).
+
+  Submission              Arch / technique                        params (trainable)   val global  val cv*  chosen fit  CODABENCH
+  E K2+K5+K6+K7           mean-prob ensemble                       -                    0.4054      0.4109   0.4152   0.4035  <- BEST test
+  E K5+K6+K7              ensemble of the three A d560 students    -                    0.4048      0.4089   0.4125   0.4027
+  K6_KD_labelatt          A d560, KD from K1 + label_att head      58.19M (58.19M)      0.4023      0.4063   0.4110   0.4033  <- best single
+  K5_KD                   A d560, KD from K1 (full-FT student)     58.28M (58.28M)      0.3982      0.4037   0.4075   0.3978
+  K7_A_full_noKD          A d560, full FT without teacher          58.28M (58.28M)      0.3907      0.3902   0.3907   0.3855
+  K2_D_partial            D d560, partial FT (top 4/8 blocks)      54.52M (18.40M)      0.3823      0.3850   0.3898   0.3796
+  K1_A_lorma              A d768, LoRMA+ r=8 (compulsory, teacher) 142.35M (2.21M)      0.3735      0.3789   0.3830   0.3770
+  K4_B_full               B d512 encoder, full FT                  41.75M (41.75M)      0.3467      0.3544   0.3571   0.3482
+  K3_C_adapter            C d560, Pfeiffer adapters b=128          59.43M (1.36M)       0.3455      0.3538   0.3576   0.3472
+  reference: TF-IDF + one-vs-rest LR (no Phase-1 model)                                 0.4077      0.4082
+  * val cv = macro-F1 of per-label thresholds shrunk halfway to the global threshold, 2-fold cross-fitted on val
+    (honest estimate); "chosen fit" = the submitted thresholds refit on all of val (optimistic by ~0.004-0.01).
+  Codabench (2026-10-27): every submission scores 0.002-0.007 below its cross-fitted val estimate (mean -0.0053),
+  Pearson(val cv, test) = 0.997 over the 9 submissions; val ranks them in the same order as test except K6 vs
+  the K5+K6+K7 ensemble (val 0.4063 < 0.4089, test 0.4033 > 0.4027). Ensembles gain ~nothing on test: the
+  best-of-127 subset's +0.0046 val gain over K6 shrinks to +0.0002 (selection bias), as in Phase 4. The 10,037-doc val is a
+  reliable test proxy (as the 994-doc val in Phase 4; unlike Phase 3's 10 docs).
+
+
+------------------------------------------------------------------------------------------
+1. DATA
+------------------------------------------------------------------------------------------
+- 2026-10-18: downloaded Phase_5_LSI/Train/train.json (299 MB) and dev.json (79 MB) from HF into
+  C:\kaggle\working\cs781\hf_data\Phase_5_LSI\Train (test.json was already there from 2026-09-30).
+- Analysis script: Phase5\analysis\lsi_eda.py; full output: Phase5\analysis\data_eda.txt.
+
+
+------------------------------------------------------------------------------------------
+2. DATA ANALYSIS (2026-10-18)
+------------------------------------------------------------------------------------------
+Sizes and fields
+  train 42,750 docs (id, text, labels) | dev 10,181 (id, text, labels) | test 13,019 (id, text - NO labels)
+  All ids unique, no empty texts, labels are ints. 3 train / 1 dev docs repeat a label inside the list
+  (dedupe when building targets).
+
+Document length (whitespace words)
+            p10   median   p90    p99     max      mean
+  train      90     430   2,766  8,143   86,858   1,124
+  dev        90     543   2,957  8,856   69,230   1,249
+  test       94     532   2,813  8,308  134,848   1,212
+  Much shorter than CJPE (median ~3.5k BPE tokens there): the median doc fits in ~1-2 512-token chunks,
+  but the p90 doc needs ~8 chunks. Long tail -> keep chunking + pooling from Phase 4.
+
+Labels
+  Exactly 100 statute IDs (0-99), all present in both train and dev (no unseen labels, no gaps).
+  Labels per doc: mean 3.7 (train) / 3.9 (dev), median 3, p90 7, max 31. 21% of train docs have 1 label.
+  Frequency: from 11,731 train docs (ID 5) down to 272 (ID 84). NOT extremely long-tailed: the rarest label
+  still has 272 train / 68 dev docs; 30 labels have <= 500 train docs. Top 10 labels = 41% of label mass,
+  top 20 = 60%. Dev frequencies are ~0.25x train for every label (stratified split) - dev is a reliable
+  macro-F1 proxy (>= 68 positives per label), unlike Phase 3.
+  Most frequent: 5 (11.7k), 34 (10.4k), 97 (7.9k), 43 (7.7k), 39 (7.1k), 12, 13, 10, 77, 94.
+  Co-occurrence is strong: (5,34) 3.6k, (12,13) 3.5k, (43,97) 3.4k, (5,43) 3.3k, (13,14) 2.8k;
+  16,191 distinct label sets in train; most common sets {34}, {5}, {61}, {5,34}, {39}, {20,28}.
+  -> label correlation worth exploiting (e.g. a co-occurrence-aware head or label-pair post-processing).
+
+Masking (important for modelling)
+  Statute references in the text are replaced by <SECTION> and <ACT> (5.3 of each per train doc on average);
+  parties/names by <ENTITY> (~56-62 per doc). 4,260 train / 1,208 test docs have no <SECTION>/<ACT> at all.
+  Unmasked leftovers exist but are rare: "section/sec./s./article/rule + number" in 2.8% of train, 3.7% of
+  dev, 3.8% of test docs; "Penal Code / IPC / CrPC / Evidence Act" named in 1.7% of train docs.
+  -> The model must infer statutes from facts and context (offence descriptions, procedure), not read them
+  off the text. The context around <SECTION>/<ACT> masks is a natural "targeted context selection" signal.
+  Phase-1 tokenizer: add/handle <SECTION>, <ACT>, <ENTITY> as single tokens (check how Phase-1 BPE splits them).
+  Texts also contain glued words ("theprosecution", "proceedingmay") from PDF extraction.
+
+Overlap / leak check
+  No shared ids between any splits. test.json has no labels -> NO test-label leak this phase (unlike Phase 4).
+  Exact duplicate texts (whitespace/case normalised):
+    within train 435, within dev 63, within test 80
+    train-dev 81, train-test 109, dev-test 62 identical texts
+  Duplicates are mostly short boilerplate orders (median 275 words; test-side duplicates median 59 words,
+  e.g. "Accordingly, the prayer for anticipatory bail is rejected..."). Among labelled duplicate groups
+  (train+dev) only 234/335 have identical label sets; for docs > 200 words 174/179 agree, for short boiler-
+  plate they often disagree -> label noise on short docs.
+  192 test docs have an exact labelled duplicate in train/dev; ~4% of a 1,000-doc test sample has a near-
+  duplicate (> 80% 8-gram containment) in train+dev. Using train/dev labels for those is just using the
+  provided training data (not a leak), but a nearest-neighbour lookup should only be trusted for long docs.
+  For honest dev scores: train-dev share 81 identical texts -> drop them from dev (or from train) when
+  measuring dev F1, otherwise dev is slightly optimistic.
+
+
+------------------------------------------------------------------------------------------
+3. IMPLICATIONS FOR THE PLAN (to be confirmed)
+------------------------------------------------------------------------------------------
+- Reuse the Phase 4 pipeline (Phase4\src: chunking, attention pooling over chunks, lightweight training,
+  KD with cached teacher logits) with a 100-way sigmoid head + BCE (try class-balanced / focal / ASL loss).
+- Shorter docs than CJPE -> up to 4-8 chunks covers p90; training should be ~2x cheaper per doc, but there
+  are 42.7k train docs (vs 31.7k) and 100 outputs.
+- Thresholds: per-label thresholds tuned on dev (68+ positives each, so stable) vs a global threshold;
+  always predict at least one label (every doc has >= 1). Macro-F1 -> per-label thresholds likely matter.
+- Experiments: A d768 LoRMA (compulsory, KD teacher), KD student A d560, D partial FT, C adapters / prefix,
+  B encoder with a technique that actually learns (BitFit failed in Phase 4) - all four architectures.
+- Validation: dev 10,181 docs minus train duplicates; optionally hold out part of dev and add the rest to
+  training for the final runs.
+
+
+------------------------------------------------------------------------------------------
+4. PIPELINE (2026-10-18; plan: Phase5\Phase5_Plan.md)
+------------------------------------------------------------------------------------------
+- Folder layout as Phase 4: Phase5\{src, submissions\<EXP>\submission_<stamp>_<RUN_ID>, analysis};
+  large files in C:\kaggle\working\cs781\phase5\{cache, runs\<EXP>\<RUN_ID>, logs}.
+- Python: the VS Code venv C:\Users\wreno\OneDrive\Desktop\LLMs\Assignments\.venv (torch 2.14 cu132). The plain
+  `python` on PATH is 3.11 CPU-only - the first smoke test ran on the CPU by mistake (7 min for one step).
+- Phase5\src:
+    copied unchanged from Phase4\src: bpe.py, backbone.py, peft.py, models_a-d.py
+    lsi.py        splits (train de-dup 42,315; val = dev de-dup minus train duplicates 10,037; test 13,019),
+                  normalisation (whitespace, case kept, <SECTION>->Section, <ACT>->Act, <ENTITY>->X: one BPE
+                  token each instead of 3-6), memory-mapped tokens, chunking, multi-label metrics (macro/micro
+                  F1, subset accuracy; checked against sklearn), thresholds (global / per-label / per-label
+                  shrunk to global, 2-fold cross-fitted on val), decode (>= 1 label per doc), submission writer
+    model.py      DocModel with a 100-way sigmoid head: "att" (Phase-4 attention pooling) or "label_att"
+                  (chunk-level statute logits + a separate attention over chunks per statute); output bias
+                  initialised to the log-odds of the train prior
+    train.py      Phase-4 lightweight driver (duty 0.6, below-normal priority, vram_fraction 0.6, token_budget
+                  2048); losses bce / bce_pw (default, pos_weight = clip(sqrt(neg/pos),1,10)) / focal / asl;
+                  KD = kd_alpha * task + (1-kd_alpha) * T^2 * BCE(sigmoid(s/T), sigmoid(t/T)), teacher logits
+                  for all train docs cached in the teacher's run dir; selection = macro-F1 at the best global
+                  threshold on a fixed 3,000-doc val subset; final: full val, strategy with the best
+                  cross-fitted macro-F1, refit on full val -> test
+    run_queue.py  K1-K7 (finished runs skipped); ensemble.py (mean probabilities); run.py; build_cache.py
+- Token caches (both tokenizers, ~1 min each): train 62.0M tokens (median 554/doc, 3.39 chunks of 512/doc,
+  92% of docs <= 8 chunks), val 16.6M (median 709), test 20.7M (median 688). Training reads 37.9M tokens per
+  epoch (<= 2048/doc); a full val pass 13.2M, test 16.4M.
+- Smoke tests 2026-10-18 (64 train / 64 val docs, 1 epoch, GPU): all four archs + KD (fake teacher) +
+  label_att/ASL run end to end. Peak VRAM: A d768 LoRMA 3.19 GB, D partial 1.14, C adapters 1.18, B full 1.31,
+  A d560 full (grad ckpt, KD) 1.34. Submission writer checked (13,019 objects, int lists, >= 1 label).
+  Trainable params: K1 1.917M + head 0.289M; K2 18.194M + 0.211M; K3 1.152M + 0.211M; K4 41.556M + 0.193M;
+  K5 58.070M + 0.211M (label_att head 0.123M).
+
+
+------------------------------------------------------------------------------------------
+5. RUNS
+------------------------------------------------------------------------------------------
+2026-10-18 16:56  queue started: run_queue.py K1 K5 K2 K3 K4 K6 K7 (log: phase5\logs\queue_1.txt)
+                  K1 throughput 10.9k tok/s throttled (Phase 4: 12.8k) -> ~3.2 h for 3 epochs (3,969 steps).
+
+K1 A d768 LoRMA+ r=8, lr 1e-4, bce_pw, att head (run A_d768_lorma_4c7c72) - DONE 2026-10-18 20:03
+  eval subset (3,000 val docs, global thr): 0.3127 (ep 0.5) 0.3345 (1) 0.3550 (1.5) 0.3635 (2) 0.3687 (2.5)
+  0.3769 (3) - still rising slowly at the end; train loss 35.1 -> 24.7.
+  full val: 0.3721 @0.5 | 0.3735 @global 0.54 | per-label 0.3960 fit / 0.3780 cv | shrunk 0.3830 fit /
+  0.3789 cv -> chosen per-label shrunk (val fit 0.3830, micro 0.479, subset acc 0.037, 4.69 labels/doc).
+  train 174.5 min, 11.9k tok/s, peak VRAM 3.50 GB, val 337 s, test 417 s; test 4.58 labels/doc.
+  submission: submissions\K1_A_lorma\submission_20261018_200321_A_d768_lorma_4c7c72
+  NOTE: below the TF-IDF reference (0.408). The Phase-1 LM + LoRMA learns statute cues more slowly than a
+  bag of n-grams; K5 (full-FT student) and K7 (full FT, no teacher) test whether full fine-tuning closes it.
+
+K5 A d560 full FT + KD from K1 (run A_d560_full_kd_fd8d35) - started 20:03; teacher logits 1,282 s; 13.2k tok/s
+  eval subset: 0.3328 (ep 0.5) 0.3594 (1) - ahead of its teacher at the same points (0.3127 / 0.3345).
+  PAUSED at step ~1,600/3,969 on the user's request: process 21944 suspended (psutil.suspend), GPU and
+  memory state kept; resume with psutil.Process(21944).resume(). Queue continues K2 K3 K4 K6 K7 afterwards.
+  2026-10-24: the suspended process did not survive the end of the session (gone on 24 Oct) -> K5 progress
+  lost (K1 and the cached teacher logits are intact). Queue restarted 10:35: run_queue.py K5 K2 K3 K4 K6 K7
+  (log: phase5\logs\queue_2.txt). Lesson: don't suspend long runs across sessions; train.py has no resume.
+  K5 rerun (deterministic: same 0.3328 / 0.3594 as the first attempt): 0.3822 (ep 1.5) 0.3851 (ep 2, step
+  2646, model_best.pt) - already above K1's final 0.3769 on the same subset; 15.9k tok/s.
+  2026-10-24 ~12:15 PAUSED again at step 3,300/3,969 (power cut; process 38596 suspended); resumed 12:25
+  (process survived, no progress lost).
+  eval subset continued: 0.3969 (ep 2.5) 0.4009 (ep 3) - still rising at the end; DONE 12:55.
+  full val: 0.3969 @0.5 | 0.3982 @global 0.53 | per-label 0.4194 fit / 0.4010 cv | shrunk 0.4075 fit / 0.4037 cv
+  -> chosen per-label shrunk (val fit 0.4075, micro 0.500, subset acc 0.045, 4.65 labels/doc).
+  train 133.6 min (excl. pause), 15.6k tok/s, peak VRAM 1.35 GB (K1 3.50), val 196 s (K1 337), test 255 s
+  (K1 417); test 4.57 labels/doc. KD student (58M, full FT) beats its 140M LoRMA teacher: +0.025 cv
+  (0.4037 vs 0.3789) at 39% of the memory and 60% of the inference time - same pattern as Phase 4.
+  submission: submissions\K5_KD\submission_20261024_125530_A_d560_full_kd_fd8d35
+
+K2 D d560 partial FT (top 4/8 blocks), lr 5e-5 (run D_d560_partial_633ad4) - DONE 14:14
+  eval subset: 0.2904 0.3254 0.3456 0.3631 0.3719 0.3815 (ep 0.5 ... 3) - still rising at the end.
+  full val: 0.3808 @0.5 | 0.3823 @global 0.56 | per-label 0.4022 fit / 0.3840 cv | shrunk 0.3898 fit / 0.3850 cv
+  -> chosen per-label shrunk (val fit 0.3898, micro 0.483, subset acc 0.047, 4.63 labels/doc).
+  train 70.6 min, 29.5k tok/s, peak VRAM 1.37 GB, val 212 s, test 268 s; test 4.55 labels/doc.
+  54M D with 18.2M trainable beats the 140M A LoRMA (0.3850 vs 0.3789 cv) at half the training time.
+  submission: submissions\K2_D_partial\submission_20261024_141410_D_d560_partial_633ad4
+
+K3 C d560 adapters (bottleneck 128), lr 5e-4 (run C_d560_adapter_30ccdd) - DONE 15:42
+  eval subset: 0.2728 0.3012 0.3205 0.3306 0.3357 0.3435 (ep 0.5 ... 3).
+  full val: 0.3449 @0.5 | 0.3455 @global 0.51 | per-label 0.3698 fit / 0.3517 cv | shrunk 0.3576 fit / 0.3538 cv
+  -> chosen per-label shrunk (val fit 0.3576, micro 0.458, subset acc 0.033, 4.96 labels/doc).
+  train 81.0 min, 25.7k tok/s, peak VRAM 1.35 GB, val 201 s, test 257 s; test 4.83 labels/doc.
+  Adapters (1.15M trainable) are the weakest, as in Phase 4, but much closer this time (larger bottleneck
+  and lr 5e-4 instead of 2e-4: no longer near the frozen-feature level).
+  submission: submissions\K3_C_adapter\submission_20261024_154250_C_d560_adapter_30ccdd
+
+Ensembles (src\ensemble.py --all-subsets, mean sigmoid probabilities, full val, 2026-10-24 ~15:50):
+  subset          global   per-label cv   shrunk cv
+  K5              0.3982   0.4010         0.4037
+  K2+K5           0.3991   0.4026         0.4044   (best, +0.0007 over K5 alone - noise level)
+  K1+K2+K5        0.3985   0.4014         0.4022
+  K1+K2           0.3926   0.3940         0.3957   (+0.011 over K2: two weaker models do combine)
+  K1+K2+K3+K5     0.3966   0.3979         0.4003
+  Adding a weaker member to K5 hurts or does nothing (K1+K5 0.3980, K3+K5 0.3937). As in Phase 4, one strong
+  model (the KD student) is enough; per-label shrunk thresholds are chosen for every subset (+0.003-0.005
+  over global, cross-fitted).
+
+K4 B d512 encoder full FT, lr 5e-5 (run B_d512_full_c0537b) - DONE 16:36
+  eval subset: 0.2774 0.3085 0.3304 0.3382 0.3408 0.3485 (ep 0.5 ... 3) - flattening.
+  full val: 0.3440 @0.5 | 0.3467 @global 0.53 | per-label 0.3690 fit / 0.3502 cv | shrunk 0.3571 fit / 0.3544 cv
+  -> chosen per-label shrunk (val fit 0.3571, micro 0.455, subset acc 0.031, 4.96 labels/doc).
+  train 49.8 min, 41.8k tok/s, peak VRAM 1.43 GB, val 86 s, test 109 s; test 4.85 labels/doc.
+  B (42M encoder, full FT) ties C adapters (0.3544 vs 0.3538) - full FT rescues B compared with Phase 4 BitFit
+  (near chance), but the architecture ranking A > D > B/C from Phase 1 holds.
+  submission: submissions\K4_B_full\submission_20261024_163556_B_d512_full_c0537b
+
+REQUIRED SET COMPLETE (2026-10-24 16:36): K1-K5 = all four architectures; LoRMA, partial FT, adapters, full FT
++ KD; 5 submission zips. K6 (KD + label_att) and K7 (full FT, no teacher) follow; then ensembles.
+
+K6 A d560 full FT + KD from K1 + label_att head (run A_d560_full_kd_cbe5af) - DONE 18:54
+  eval subset: 0.3330 0.3626 0.3819 0.3873 0.3962 0.4017 (ep 0.5 ... 3) - tracks K5 (+0.000-0.004).
+  full val: 0.4006 @0.5 | 0.4023 @global 0.55 | per-label 0.4236 fit / 0.4050 cv | shrunk 0.4110 fit / 0.4063 cv
+  -> chosen per-label shrunk (val fit 0.4110, micro 0.503, subset acc 0.050, 4.45 labels/doc).
+  train 130.9 min, 15.9k tok/s, peak VRAM 1.35 GB, val 196 s, test 256 s; test 4.35 labels/doc.
+  Best single model: +0.0026 cv over K5 (same student, shared attention head) - small, around the noise level;
+  per-statute attention over chunks does not change much when docs have ~3.7 chunks on average.
+  submission: submissions\K6_KD_labelatt\submission_20261024_185428_A_d560_full_kd_cbe5af
+
+K7 A d560 full FT WITHOUT a teacher (KD baseline; run A_d560_full_fb9f28) - DONE 21:13
+  eval subset: 0.3075 0.3430 0.3678 0.3778 0.3844 0.3924 (ep 0.5 ... 3) vs K5 0.3328 0.3594 0.3822 0.3851
+  0.3969 0.4009 - behind the KD student at every eval (-0.008 to -0.025), gap shrinking.
+  full val: 0.3863 @0.5 | 0.3907 @global 0.56 | per-label 0.4076 fit / 0.3856 cv | shrunk 0.3965 fit / 0.3902 cv
+  -> chosen global (val 0.3907, micro 0.484, subset acc 0.049, 4.23 labels/doc).
+  train 132.0 min, 15.8k tok/s, peak VRAM 1.36 GB; test 4.19 labels/doc.
+  Train loss 18.9 vs K5's task part ~24: the student without a teacher fits train harder and generalises worse.
+  => separates Phase-4 obs. 9: of K5's +0.025 over its K1 teacher, ~+0.012 comes from full FT of the small
+  model (K7 0.3902 vs K1 0.3789) and ~+0.013 from distillation itself (K5 0.4037 vs K7 0.3902).
+  submission: submissions\K7_A_full_noKD\submission_20261024_211349_A_d560_full_fb9f28
+
+Final ensembles (2026-10-24 21:20; ensemble.py --all-subsets over K1-K7 = 127 subsets):
+  K2+K5+K6+K7   global 0.4054 | per-label cv 0.4067 | shrunk cv 0.4109 (best subset; +0.0046 over K6)
+  K5+K6+K7      global 0.4048 | per-label cv 0.4061 | shrunk cv 0.4089
+  K1+K2+K6+K7   0.4090 | K2+K4+K5+K6+K7 0.4089 | K5+K6 0.4075 | all 7: below the top 10.
+  The best of 127 subsets is selection-biased (expect ~0.4085-0.41 on test); K5+K6+K7 is the less-selected
+  hedge. Submissions: submissions\E_ensemble\submission_20261024_212045_K2+K5+K6+K7 (test 4.32 labels/doc)
+                      submissions\E_ensemble\submission_20261024_212051_K5+K6+K7     (test 4.49 labels/doc)
+  All 9 zips validated: prediction.json only, 13,019 objects in test.json order, unique int ids 0-99, >= 1 each.
+
+Analysis of K1-K5 (analysis\analyze.py -> analysis\results.md / results.csv, full val, chosen thresholds):
+  - Rare statutes: per-statute F1 by train-frequency quintile (rarest 20 -> most frequent 20), K5:
+    0.306 / 0.375 / 0.342 / 0.478 / 0.536; r(log freq, F1) = 0.54-0.58 for every run. Same ordering of runs in
+    every quintile (K5 > K2 > K1 > K3 ~ K4) - the KD gain is spread over rare and frequent statutes alike.
+  - Weakest statutes (K5): 8 (F1 0.07), 2 (0.13), 52 (0.16), 0, 99, 9, 32, 76 (< 0.19); best: 34 (0.83),
+    28 (0.80), 20 (0.76), 94, 81 (0.72-0.73). Most-missed are the most frequent ones (5, 43, 39, 97): when
+    missed, the model usually predicts another frequent statute of the same cluster (5 <-> 97 / 12 / 39,
+    43 <-> 5 / 97) - confusions inside the 5/34/39/43/97 group.
+  - Label count: docs with 1 gold statute get 3.2 predictions (F1 0.15), docs with 7+ get 6.9 vs 8.7 gold
+    (F1 0.42) - per-label thresholds over-predict on simple docs and under-predict on complex ones.
+    Count-capped decoding (keep at most round(a*sum p + b) labels above the per-label thresholds, a/b fitted
+    on val, 2-fold cross-fitted) does NOT help: 0.4017 vs 0.4037 -> not used.
+  - Co-occurrence: for 46 strongly linked pairs (P(b|a) >= 0.6 in train), when K5 correctly predicts a and b
+    is also gold, it predicts b 93.9% of the time (overall micro recall 54.7%) - the head already models the
+    correlations, so pair-based post-processing has little to add.
+  - Length: F1 is lowest for 1-chunk docs (0.344, short orders with little evidence) and 9+ chunk docs
+    (0.351, inference reads only 8 evenly spaced chunks); best for 2-8 chunks (0.385-0.396).
+  Fallback added: src\finalize.py K5 -> full val + thresholds + test submission from model_best.pt if the
+  suspended process is lost (no retraining).
+
+Reference baseline (no Phase-1 model, not a submission; analysis\tfidf_baseline.py, CPU 21 min):
+  TF-IDF 1-2 grams (200k features) + one-vs-rest LR (C 4, balanced) on full val (10,037 docs):
+    macro-F1 0.4053 @0.5 | 0.4077 @global 0.54 | per-label 0.4268 fit / 0.4062 cross-fitted |
+    shrunk 0.4148 fit / 0.4082 cv | micro-F1 0.505, subset acc 0.068, 4.55 labels/doc.
+  Per-label thresholds gain +0.02 in-sample but nothing cross-fitted -> the in-sample per-label gain is
+  mostly overfitting; the cross-fitted selection in train.py guards against it.
+
+
+------------------------------------------------------------------------------------------
+6. NEXT STEPS
+------------------------------------------------------------------------------------------
+- DONE 2026-10-24: K1-K7 + 2 ensembles (9 zips); uploaded to Codabench, scores recorded 2026-10-27.
+- Report: analysis\results.md (tables 1-6), this log's observations; K7 separates KD from full FT.
+- AI-assisted (for the LLM Declaration): data download, analysis, plan, all Phase5\src code and this log (Claude).

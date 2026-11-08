@@ -1,0 +1,13 @@
+{
+ "gen": {
+  "temperature": 0.8,
+  "top_k": 50,
+  "top_p": 0.95,
+  "repetition_penalty": 1.1,
+  "max_new_tokens": 512
+ },
+ "run": "d576_L23_T1024_v35k_fbb29e",
+ "ckpt": "C:\\kaggle\\working\\cs781\\runs\\A_decoder_only_gqa\\d576_L23_T1024_v35k_fbb29e\\ckpt_best.pt",
+ "tokenizer": "bpe_v35000_666b72a523.json",
+ "data": "data_c4552ab162"
+}

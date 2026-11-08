@@ -1,0 +1,310 @@
+Phase 3
+
+Rhetorical Role Prediction (RR) - 12 to 16 Oct 2026 (deadline 16 Oct 23:59 IST)
+
+
+==========================================================================================
+PHASE 3 SUMMARY - one rhetorical-role label per sentence, 13 labels, macro-F1
+==========================================================================================
+Task: for each test document (CL + IT domains), predict one label per sentence, same order and count.
+Rules: start from the Phase-1 models (ALL FOUR architectures); >= 4 substantially different
+experiments: >= 3 different fine-tuning/PEFT techniques (LoRMA compulsory) + >= 1 knowledge
+distillation. Minimum 4 valid submissions (aim for 7-8).
+Plan: Phase3_Plan.md. Hardware: same laptop (RTX 5070 Ti 12 GB), .venv kernel.
+
+
+------------------------------------------------------------------------------------------
+1. EXPERIMENTS (planned)
+------------------------------------------------------------------------------------------
+  R1  A d768 (140.2M)   LoRMA+ r=8 (compulsory); context ladder S -> W, linear -> BiGRU -> CRF
+  R2  A d768            full fine-tuning (KD teacher)
+  R3  B encoder (~41M)  rsLoRA
+  R4  C prefix-LM (58M) IA3
+  R5  D efficient (54M) prefix tuning, 2048 context
+  R6  A d560 (58M)      knowledge distillation from R2 (or the R7 ensemble)
+  R7  ensemble of the best models (sentence marginals averaged -> Viterbi)
+
+
+------------------------------------------------------------------------------------------
+2. DATA (measured 2026-10-11)
+------------------------------------------------------------------------------------------
+- Train data downloaded 2026-10-11 to C:\kaggle\working\cs781\hf_data\Phase_3_RR\Train.
+- Train/dev: list of {id, text: [sentences], labels: [labels]}; test: {id: [sentences]}.
+- 100 doc IDs, all unique across CL/IT and splits -> one prediction.json with 10 test IDs.
+
+              docs  sentences  sents/doc (min/med/max)  words/sent med  p(label == prev)
+  CL train     40     10,593        19 / 120 / 1816          27            0.937
+  CL dev        5      1,396        32 / 184 /  848          28
+  CL test       5      1,339        18 / 114 /  942          27
+  IT train     40      6,252        25 / 126 /  442          28            0.754
+  IT dev        5        746        45 / 120 /  382          26
+  IT test       5        858        40 / 159 /  420          29
+
+- Train label counts (docs containing the label):
+  CL: Fact 2979 (40), Ratio 2856 (40), PrecRelied 1305 (17), ArgResp 996 (26), ArgPet 976 (37),
+      RulingLower 438 (16), Statute 367 (21), Dissent 284 (2), PrecNotRelied 209 (11),
+      RulingPresent 113 (40), None 53 (11), Issue 17 (9)
+  IT: Ratio 1445 (40), Fact 1119 (38), Statute 732 (29), PrecRelied 640 (30), ArgPet 637 (35),
+      RulingLower 436 (30), PrecNotRelied 360 (21), ArgResp 352 (33), None 244 (38),
+      RulingPresent 194 (40), Issue 90 (27), PrecOverruled 3 (1)
+- Dev has no Dissent and no PrecedentOverruled.
+
+
+------------------------------------------------------------------------------------------
+3. RESULTS
+------------------------------------------------------------------------------------------
+  Reference points on dev (src\sanity.py, 2026-10-11; no model):
+  Baseline                                   macro-F1 present  all-13   acc
+  majority label per domain (Fact / Ratio)   0.0428            0.0362   0.1699
+  ORACLE: copy previous sentence's gold      0.7544            0.6383   0.8838   (CL acc 0.953, IT 0.753)
+  (the oracle is not a model - it shows how much label persistence alone explains)
+
+  Main runs (2026-10-11, srcun_phase3.py; window mode, mean pooling, domain emb., BiGRU 2x256 + CRF,
+  64-sentence crops x 4 per step, up to 15 epochs, early stop patience 4 on dev macro-F1 present):
+  Exp          Backbone       Method        Trainable (backbone+head)  Dev F1 present  all-13  CL      IT      acc     ep  min   VRAM
+  R1_A_lorma   A d768 140M    LoRMA+ r=8    1.92M + 2.77M              0.5663          0.4792  0.4903  0.5730  0.6232  15  10.4  5.33 GB
+  R2_A_full    A d768         full FT       140.1M + 2.77M             0.5579          0.4721  0.5270  0.5031  0.6387   8   7.8  5.41 GB
+  R3_B_rslora  B enc 42M      rsLoRA r=8    0.49M + 2.37M              0.4176          0.3534  0.3961  0.3873  0.4986   8   3.5  1.37 GB
+  R4_C_ia3     C 58M          IA3           0.03M + 2.45M              0.4810          0.4070  0.3672  0.4771  0.5668  15   8.8  3.81 GB
+  R5_D_prefix  D 54M          prefix (16)   4.89M + 2.45M              0.4843          0.4098  0.4301  0.4812  0.5453  13  13.1  3.49 GB
+  R6_KD        A d560 58M     full FT + KD  58.07M + 2.45M             0.5493          0.4648  0.4948  0.5252  0.6307  14  12.9  4.03 GB
+               (KD: teacher = R2 A d768 full FT (140M, dev 0.5579), loss 0.5*CRF-NLL + 0.5*T^2*KL(teacher||student
+               emissions), T = 2; sentence-level targets, so the v35k teacher / v32k student tokenizers don't matter)
+  R5/R6 ran 2026-10-12 with the lighter settings (section 5); R5/R6 epochs ~50 s incl. the 0.2 s step pause.
+  Submissions written (not uploaded yet):
+    R1  Phase3\submissions\R1_A_lorma\submission_20261011_165805_A_d768_lorma_w_ba1538\submission.zip
+    R2  Phase3\submissions\R2_A_full\submission_20261011_170558_A_d768_full_w_4ef131\submission.zip
+    R3  Phase3\submissions\R3_B_rslora\submission_20261011_170928_B_d512_rslora_w_2d2f72\submission.zip
+    R4  Phase3\submissions\R4_C_ia3\submission_20261011_171823_C_d560_ia3_w_eb3e89\submission.zip
+    R5  Phase3\submissions\R5_D_prefix\submission_20261012_132235_D_d560_prefix_w_dca8c6\submission.zip
+    R6  Phase3\submissions\R6_KD\submission_20261012_133549_A_d560_full_w_kd_86811a\submission.zip
+  All six validated 2026-10-12 (10 test ids, one official label per sentence, prediction.json at zip root).
+
+  Codabench (macro-F1 on the 10 test docs; reported by the user 2026-10-12):
+  Exp          Test     Dev all-13  Dev present  test - dev all-13  test - dev present
+  R1_A_lorma   0.4502   0.4792      0.5663       -0.029             -0.116
+  R2_A_full    0.4146   0.4721      0.5579       -0.058             -0.143
+  R3_B_rslora  0.3642   0.3534      0.4176       +0.011             -0.053
+  R4_C_ia3     0.4349   0.4070      0.4810       +0.028             -0.046
+  R5_D_prefix  0.4950   0.4098      0.4843       +0.085             +0.011   <- BEST
+  R6_KD        0.4551   0.4648      0.5493       -0.010             -0.094
+  Mean test - dev: all-13 +0.005 (mean |diff| 0.037), present -0.074 (mean |diff| 0.077).
+  Spearman rank correlation test vs dev (all-13): 0.31.
+
+  Round 2 (2026-10-12 evening, srcun_round2.py; epochs 20, patience 5, checkpoint selected on dev all-13):
+  Exp               Run id                   Change                                   Dev all-13  present  ep  min   VRAM
+  R7_D_lorma        D_d560_lorma_w_c8f1dd    D + LoRMA r=8, 2048 window               0.4493      0.4868    7  11.5  4.24 GB
+  R7_D_lorma        D_d560_lorma_w_5232ad    D + LoRMA r=8, 1024 window               0.4393      0.5191    8  10.6  3.56 GB
+  R8_D_prefix_long  D_d560_prefix_w_b8d31c   R5 with 128-sentence crops (x2 per step) 0.4176      0.4936   18  17.0  4.70 GB
+  R1_A_lorma        A_d768_lorma_w_bc8045    R1 with 20 epochs / patience 5           0.4493      0.5310    7  11.1  5.30 GB
+  R6_KD             A_d560_full_w_c030bd     KD BASELINE: student without teacher     0.4309      0.5092   13  15.2  4.03 GB
+  Ensembles (src\ensemble.py: argmax of averaged CRF marginals):
+  E_ensemble        D4_ensemble              R5 + R7 (2048) + R7 (1024) + R8          0.4447      0.5256
+  E_ensemble        all10_ensemble           all 10 runs except the KD baseline       0.4748      0.5611
+  Submissions written (not uploaded yet):
+    Phase3\submissions\R7_D_lorma\submission_20261012_205747_D_d560_lorma_w_c8f1dd\submission.zip      (2048)
+    Phase3\submissions\R7_D_lorma\submission_20261012_210827_D_d560_lorma_w_5232ad\submission.zip      (1024)
+    Phase3\submissions\R8_D_prefix_long\submission_20261012_212529_D_d560_prefix_w_b8d31c\submission.zip
+    Phase3\submissions\R1_A_lorma\submission_20261012_213638_A_d768_lorma_w_bc8045\submission.zip
+    Phase3\submissions\R6_KD\submission_20261012_215157_A_d560_full_w_c030bd\submission.zip   (KD baseline)
+    Phase3\submissions\E_ensemble\submission_20261012_215232_D4_ensemble\submission.zip
+    Phase3\submissions\E_ensemble\submission_20261012_215241_all10_ensemble\submission.zip
+
+  Codabench round 2 (reported 2026-10-12):
+  Submission                               Dev all-13  Test
+  R7 D LoRMA 2048 (c8f1dd)                 0.4493      0.4441
+  R7 D LoRMA 1024 (5232ad)                 0.4393      0.4536
+  R8 D prefix, 128-sentence crops          0.4176      0.4218
+  R1b A LoRMA 20-epoch schedule (bc8045)   0.4493      0.4743
+  R6 KD baseline, no teacher (c030bd)      0.4309      0.4660
+  D4_ensemble                              0.4447      0.4306
+  all10_ensemble                           0.4748      0.4744
+  Over all 13 uploads: test - dev all-13 = +0.007 +- 0.033; Spearman 0.23, Pearson 0.49.
+
+  Round 3 (2026-10-12 night, srcun_round3.py): full-data retrains on train+dev (90 docs, 18,987 sentences)
+  with the same 15-epoch schedule as the selected runs; final-epoch model kept (no dev left to select on):
+  Exp           Run id                      Config of                         final train loss  min/epoch
+  R5_D_prefix   D_d560_prefix_w_all_bc6a76  R5 (D prefix, test 0.4950)        0.1560            ~0.95
+  R1_A_lorma    A_d768_lorma_w_all_aea4b0   R1 (A LoRMA, test 0.4502/0.4743)  0.0121            ~1.0
+  R6_KD         A_d560_full_w_all_324fae    KD baseline (no teacher, 0.4660)  0.0050            ~0.95
+  Ensembles: full3_ensemble (the three above), all10_full3_ensemble (all10 + the three above).
+  Submissions written (not uploaded yet):
+    Phase3\submissions\R5_D_prefix\submission_20261012_224321_D_d560_prefix_w_all_bc6a76\submission.zip
+    Phase3\submissions\R1_A_lorma\submission_20261012_225830_A_d768_lorma_w_all_aea4b0\submission.zip
+    Phase3\submissions\R6_KD\submission_20261012_231220_A_d560_full_w_all_324fae\submission.zip
+    Phase3\submissions\E_ensemble\submission_20261012_231238_full3_ensemble\submission.zip
+    Phase3\submissions\E_ensemble\submission_20261012_231238_all10_full3_ensemble\submission.zip
+
+  Codabench round 3 (reported 2026-10-13):           Test     (same config on 80 docs)
+    all10_full3_ensemble                             0.4697
+    R5 D prefix, train+dev (bc6a76)                  0.3976   (0.4950)
+    full3_ensemble                                   0.4529
+    R1 A LoRMA, train+dev (aea4b0)                   0.4678   (0.4502 / 0.4743)
+    KD baseline, train+dev (324fae)                  0.4230   (0.4660)
+
+  Logit adjustment (2026-10-13, ensemble.py tau): label = argmax log p - tau * log prior(train freq.).
+  Dev all-13 of the all10 ensemble / mean of its 10 single runs:
+    tau   0.00 0.4748/0.4266 | 0.25 0.4857/0.4319 | 0.50 0.4836/0.4338 | 0.75 0.4831/0.4316 | 1.00 0.4711/0.4268
+    (at tau >= 0.75 Dissent / PrecedentOverruled start being predicted; tau = 0.5 chosen, middle of the plateau)
+  Submissions written (not uploaded yet), all tau = 0.5:
+    Phase3\submissions\E_ensemble\submission_20261013_121454_all10_tau05\submission.zip          dev 0.4836
+    Phase3\submissions\E_ensemble\submission_20261013_121454_all10_full3_tau05\submission.zip    (no dev)
+    Phase3\submissions\E_ensemble\submission_20261013_121454_R5_tau05\submission.zip             dev 0.4001
+    Phase3\submissions\E_ensemble\submission_20261013_121454_R1all_tau05\submission.zip          (no dev)
+    (single-run "ensembles" decode by argmax of CRF marginals, not Viterbi as in the original runs)
+
+  Codabench round 4 (logit adjustment tau = 0.5, reported 2026-10-13):   Test     without tau
+    all10_tau05                                                          0.4548   0.4744
+    all10_full3_tau05                                                    0.4620   0.4697
+    R1all_tau05                                                          0.4759   0.4678
+    R5_tau05 (also argmax-of-marginals instead of Viterbi)               0.4808   0.4950
+  Mean change -0.009 (range -0.020 to +0.008).
+
+  TOTAL: 22 Codabench submissions. Best: R5_D_prefix (D_d560_prefix_w_dca8c6) 0.4950.
+
+  Dev-only ensemble check (2026-10-12, averaged CRF marginals from probs.pkl -> argmax, no training):
+    all six models: dev all-13 0.4820 / present 0.5697 (R1 alone 0.4792 / 0.5663 -> +0.003)
+    best subset (R1+R3) 0.4912 / 0.5805 - chosen on dev, so this +0.012 is not trustworthy.
+
+
+------------------------------------------------------------------------------------------
+4. OBSERVATIONS
+------------------------------------------------------------------------------------------
+1. Labels come in long runs: 93.7% of CL and 75.4% of IT sentences share the previous sentence's
+   label -> document context + a transition model (CRF/Viterbi) should matter most.
+
+2. Rare labels: Issue (17 in CL), PrecedentOverruled (3, one IT doc), Dissent (284 but only 2 CL docs);
+   Dissent and PrecOverruled are absent from dev. How Codabench's macro-F1 treats labels absent from
+   gold is unknown -> local scorer reports both (all 13 labels / labels in gold+pred).
+
+3. Dev and test are 10 docs each -> expect at least the +-0.03 noise seen in Phase 2.
+
+4. The "previous gold label" oracle reaches macro-F1 0.754 / acc 0.884 on dev: most of the task is finding
+   where a run of one role ends. Its weak labels are exactly the short-run ones: Issue 0.20, None 0.52,
+   RulingByPresentCourt 0.57. -> a CRF/BiGRU over sentences is essential; the rare short-run roles decide macro-F1.
+
+5. "all-13" macro-F1 is much lower than "present" (0.638 vs 0.754 for the oracle) because Dissent and
+   PrecedentOverruled are absent from dev and count as F1 = 0. Which variant Codabench uses matters.
+
+6. First runs: LoRMA (1.4% of A's weights trained) matches full fine-tuning on dev (0.566 vs 0.558; within the
+   +-0.03 noise), as in Phase 2. Phase-1 ranking: A (0.56-0.57) > D (0.484) ~ C (0.481) > B (0.42)
+   (Phase 1: A > D > C > B; D and C are tied here, within noise).
+   R1 and R4 were still improving at the last epoch (15) -> a longer schedule may help them.
+7. Full FT overfits fastest: train loss 0.05 by epoch 8, dev F1 jumps +-0.06 between epochs after that.
+
+9. Codabench most likely averages over ALL 13 labels (or the test set also lacks some rare labels): dev
+   all-13 tracks the test score with no bias (mean +0.005), while dev "present" overestimates by 0.074 on
+   average. -> select models on dev all-13 from now on. Not proof: the test gold is hidden.
+
+10. Dev barely predicts test here: rank correlation 0.31, single runs differ by up to 0.085 (R5). With 10
+    test docs (5 per domain) one or two documents move the score a lot. Only large dev gaps mean anything.
+
+11. D + prefix tuning is the best Codabench model (0.495), although it was 4th on dev. D is the only model
+    with a 2048-token window, so each sentence sees about twice as much surrounding text; the test docs
+    are longer than dev (IT test median 159 sentences / 6.6k words vs 120 / 3.7k in dev). Plausible
+    reason, not tested yet.
+
+12. LoRMA beats full fine-tuning on the test set again (0.450 vs 0.415), as in Phase 2 (0.509 vs 0.479).
+    The KD student (58M, 0.455) also beats its own 140M teacher (R2, 0.415) on test.
+
+13. Ensembling all six adds only +0.003 on dev, unlike Phase 2 (+0.04): the models make similar mistakes.
+
+14. Round 2 (dev all-13): (a) context length on D: 2048 vs 1024 window 0.449 vs 0.439 - same within noise;
+    (b) LoRMA on D (0.449) beats prefix tuning on D (R5 0.410) on dev, but R5 won on test;
+    (c) longer training crops (128 sentences) did not help prefix tuning (0.418 vs 0.410);
+    (d) R1 with a 20-epoch schedule stopped at epoch 7 with 0.449, worse than R1 (0.479): the slower LR decay
+        changes the run, and patience on a noisy 10-doc dev set stops it early;
+    (e) KD helps: the same 58M student scores 0.431 alone vs 0.465 with the teacher (+0.034), the same size
+        of gain as in Phase 2 (+0.026).
+    (f) ensembles do not beat the best single model on dev (all ten 0.475 vs R1 0.479).
+
+15. Codabench round 2: the long-context explanation for R5 is NOT supported - D at 1024 tokens scored
+    0.454 vs 0.444 at 2048. Four D runs differing in method/window span 0.422-0.495 and all 11 single
+    models 0.443 +- 0.033 -> R5's 0.495 is partly a lucky draw on 10 test docs.
+16. KD on the test set: student alone 0.466 vs with KD 0.455 - the opposite of dev (+0.034). Both gaps are
+    inside the +-0.033 noise: KD's effect cannot be resolved with 10 dev / 10 test docs. Report both.
+17. all10 ensemble 0.474: among the best and the least dependent on luck (averages 10 runs); the D-only
+    ensemble (0.431) was worse than its members' mean (0.453).
+
+18. Training on train+dev did NOT help: R5 0.495 -> 0.398, KD baseline 0.466 -> 0.423, R1 0.450 -> 0.468.
+    Same config, 10 more docs, swings of -0.10 to +0.02: run-to-run randomness (+-0.05 on 10 test docs)
+    dominates any effect of 12% more data. R5's 0.495 was largely luck.
+
+19. Error analysis of the all10 ensemble on dev (per label, gold vs predicted counts):
+    RatioOfTheDecision over-predicted (710 pred / 403 gold, F1 0.64); rare roles under-predicted:
+    RulingByLowerCourt 26/102 (F1 0.41), None 13/33 (0.39), Issue 6/15 (0.48), ArgumentPetitioner 210/400.
+    Top confusions (gold -> pred): ArgPet -> ArgResp 103, Fact -> Ratio 83, PrecRelied -> Ratio 80,
+    ArgPet -> Ratio 71, PrecRelied -> Fact 43. Dissent / PrecOverruled are never predicted.
+    -> the models fall back on the majority role; macro-F1 punishes that.
+
+20. Logit adjustment (tau = 0.5) raises dev all-13 by ~+0.01 for the ensemble and +0.007 on average for
+    single models, with a flat optimum 0.25-0.5 -> one parameter, small and consistent gain.
+
+21. Logit adjustment did not carry over to the test set: -0.009 on average over 4 submissions (dev
+    predicted +0.01). Like every other change in rounds 2-4, the effect is smaller than the +-0.03-0.05
+    test noise. Conclusion for the report: with 10 dev / 10 test documents, differences below ~0.05
+    between Phase-3 systems cannot be resolved; only the architecture gap (A/D/C ~0.44-0.47 vs B 0.36)
+    and the PEFT ~ full-FT parity (repeated in Phase 2) are consistent findings.
+
+22. From-scratch check (2026-10-13, TA requirement from Phase 3): every adaptation technique (LoRA, rsLoRA,
+    LoRMA, IA3, prefix tuning, adapters, partial FT), KD, CRF/Viterbi and the head are written by hand in
+    Phase3\src. Imports are only torch, numpy, regex (tokenizer) and the standard library; HF peft /
+    transformers are not installed or used. (src\peft.py is our own file - same name as the HF library.)
+
+8. KD: the 58M student reaches 0.549 vs the 140M teacher's 0.558 (98% of the score, 41% of the parameters,
+   4.0 vs 5.4 GB training memory). The student WITHOUT KD has not been trained yet -> needed to show what the
+   distillation itself adds (Phase 2: +0.026 on val).
+
+
+------------------------------------------------------------------------------------------
+5. NOTEBOOK / PIPELINE
+------------------------------------------------------------------------------------------
+- Folder layout (same as Phase 2): Phase3\{src, notebooks, data, submissions\<EXP>\submission_<stamp>_<RUN_ID>,
+  analysis}; large files in C:\kaggle\working\cs781\phase3\{cache, runs\<EXP>\<RUN_ID>, logs}.
+- 2026-10-11 Phase3\src written:
+    copied from Phase2\src: bpe.py, models_a-d.py (+ "PHASE 3" prefix-tuning hook in each attention),
+      backbone.py (+ key padding mask for B/C, + per-block gradient checkpointing)
+    peft.py      Phase 2 methods + rslora (alpha/sqrt(r)), ia3 (k/v + FFN-inner rescaling), prefix (MLP-reparam.
+                 K/V prefixes, visible through causal / sliding-window / padding masks)
+    rr_data.py   load CL/IT train/dev/test, sentence tokenization (cache in phase3\cache), sentence mode
+                 (1 row per sentence) and window mode (sentences packed into the backbone window with a newline
+                 separator; overlapping windows keep the copy with most left context (causal) / most central)
+    heads.py     RRModel: mean/last pooling per sentence -> + domain embedding -> BiGRU (2x256, or none) ->
+                 linear -> CRF (transitions init from train log P(l_t|l_t-1), Viterbi + forward-backward marginals)
+    evaluate.py  macro-F1 (present / all-13), per label, per domain, confusion; prediction.json validation + zip
+    train_rr.py  driver: random 64-sentence document crops, 4 crops/step, early stop on dev macro-F1,
+                 sentence-level KD (KL on teacher emissions, any tokenizer), probs.pkl for ensembling
+    run.py (CLI), sanity.py (gold round trip = 1.0, baselines)
+- Smoke tests (debug mode, 4 docs, 1 epoch) all ran: A lorma window, B rslora window, C ia3 window, D prefix window,
+  A full + grad checkpointing, C lorma sentence-mode softmax + sqrt class weights, B prefix sentence mode,
+  A d560 KD from an A d768 run. Trainable params: A lorma 1.92M backbone + 2.77M head; B rslora 0.49M;
+  C ia3 0.027M; D prefix 4.89M (mostly the reparameterisation MLP); head 2.4-2.8M.
+- 2026-10-12 R5 (D + prefix tuning) crashed the laptop twice (Windows bugcheck 0x20001 + unexpected reboot,
+  13:01 and ~13:06, both inside R5's first epoch; R6 was never reached). Cause: the first prefix-tuning version
+  replaced D's blocked sliding-window kernel with a dense [T, T+P] mask (T = 2048) in all 8 layers.
+  Fixes:
+    peft._sliding_window_prefix: prefix keys/values added to each block of D's own blocked kernel
+      (O(T*(2W+P)) memory); identical output to the dense version (max abs diff 5e-16, float64 test).
+    train_rr: vram_fraction=0.75 (torch.cuda.set_per_process_memory_fraction -> an OOM error instead of
+      Windows spilling into shared RAM), token_budget 8192 -> 4096, optional step_pause (s of idle GPU
+      after each optimizer step; 0.2 for R5/R6). None of these are part of the run id (no effect on results
+      except token_budget batching).
+  Measured after the fix (25 steps on the densest docs + 1 dev pass): D prefix peak 3.43 GB, A d560 full 4.04 GB
+  (R1/R2 ran at ~5.3 GB without problems).
+- AI-assisted (for the LLM Declaration): data analysis, experiment plan and all Phase3\src code (Claude).
+
+
+------------------------------------------------------------------------------------------
+6. NEXT STEPS
+------------------------------------------------------------------------------------------
+- DONE 2026-10-11: Phase3\src + sanity checks + smoke tests (see section 5).
+- DONE 2026-10-12: R1-R6 trained, six submissions written and validated (not uploaded).
+- DONE 2026-10-12: all six uploaded (best R5 D prefix 0.4950).
+- DONE: D window 2048 vs 1024 (R7 pair) - uploaded, no long-context effect (obs. 15).
+- DONE 2026-10-13: rounds 3-4 uploaded (22 submissions total, best 0.4950 R5).
+- DONE 2026-10-13: report material (srcnalyze.py): analysisesults.md/.csv (all 22 submissions),
+  figuresig1 scores test vs dev, fig2 per-role F1, fig3 confusion matrix, fig4 CL vs IT, fig5 params vs
+  score; analysis\error_analysis\error_analysis.md. Phase 3 summary added to the project README.txt.
+- DONE: KD baseline (R6_KD c030bd), round 2 + ensembles written (see Results). Upload and record scores.
+- Ensemble script (average probs.pkl of several runs -> Viterbi) - not written yet.
+- R1 context ladder, first upload; ask on Discord how macro-F1 handles absent labels.

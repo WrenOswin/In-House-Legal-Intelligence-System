@@ -1,0 +1,12 @@
+{
+ "name": "D4_ensemble",
+ "runs": [
+  "C:/kaggle/working/cs781/phase3/runs/R5_D_prefix/D_d560_prefix_w_dca8c6",
+  "C:/kaggle/working/cs781/phase3/runs/R7_D_lorma/D_d560_lorma_w_c8f1dd",
+  "C:/kaggle/working/cs781/phase3/runs/R7_D_lorma/D_d560_lorma_w_5232ad",
+  "C:/kaggle/working/cs781/phase3/runs/R8_D_prefix_long/D_d560_prefix_w_b8d31c"
+ ],
+ "dev_macro_f1_all": 0.4447282764876506,
+ "dev_macro_f1_present": 0.5255879631217689,
+ "decoding": "argmax of averaged CRF marginals"
+}

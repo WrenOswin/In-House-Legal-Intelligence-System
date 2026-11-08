@@ -1,0 +1,30 @@
+splits {'train': 6730, 'val': 300, 'test': 100}
+train doc words   10%=1348 25%=2018 50%=3145 75%=4984 90%=7851 99%=24147 max=139645 mean=4376
+train summ words  10%=292 25%=421 50%=639 75%=963 90%=1502 99%=4301 max=27768 mean=843
+train ratio %     10%=9 25%=14 50%=22 75%=31 90%=39 99%=55 max=915 mean=24
+val doc words   10%=1354 25%=1973 50%=2983 75%=4897 90%=7705 99%=25821 max=45845 mean=4211
+val summ words  10%=299 25%=421 50%=610 75%=942 90%=1439 99%=2526 max=6697 mean=777
+val ratio %     10%=9 25%=15 50%=22 75%=31 90%=41 99%=56 max=69 mean=24
+test doc words   10%=1504 25%=2100 50%=3171 75%=5408 90%=8563 99%=29199 max=39695 mean=4783
+sentences/doc (val) 10%=58 25%=83 50%=113 75%=186 90%=304 99%=888 max=1265 mean=160
+novel summary bigrams (val) mean 0.328 median 0.311
+mean sentence salience by position decile: 0.223 0.405 0.463 0.484 0.479 0.477 0.478 0.488 0.510 0.470
+
+coverage of reference content words by the model input (val):
+  whole document          0.897
+  head     400 words      0.293
+  select   400 words      0.375
+  head     800 words      0.452
+  select   800 words      0.533
+  head    1200 words      0.569
+  select  1200 words      0.639
+  head    1600 words      0.650
+  select  1600 words      0.708
+
+extractive baselines on val (ROUGE F1, no Phase-1 model):
+  lead-300 words    {'rouge1': 0.36546902127199643, 'rouge2': 0.15997083164733827, 'rougeL': 0.18414277710904284}
+  select-300 words  {'rouge1': 0.4527619889578892, 'rouge2': 0.2537476626078946, 'rougeL': 0.26327924934481617}
+  lead-500 words    {'rouge1': 0.4636208705176839, 'rouge2': 0.22352582831075077, 'rougeL': 0.22960577942508062}
+  select-500 words  {'rouge1': 0.5400978791550948, 'rouge2': 0.3097695718840971, 'rougeL': 0.30332779883109434}
+  lead-700 words    {'rouge1': 0.4983000665277686, 'rouge2': 0.2536448712448022, 'rougeL': 0.25330361612612573}
+  select-700 words  {'rouge1': 0.5629654557063103, 'rouge2': 0.3345700167644184, 'rougeL': 0.3159996685195778}

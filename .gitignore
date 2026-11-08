@@ -1,0 +1,32 @@
+# secrets and personal notes
+.env
+README.txt
+
+# course material / Office lock files
+*.docx
+~$*
+
+# empty local work folder (real work dir is C:/kaggle/working/cs781, outside the repo)
+working/
+
+# model weights, caches and Python artefacts
+*.pt
+*.bin
+*.npy
+*.pkl
+__pycache__/
+.ipynb_checkpoints/
+
+# LaTeX build files
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+
+# final HelloIITK submission (zip and its extracted copy); its contents are code/ and Report/
+CS781-CP-Wren-Oswin-261110073-report_code.zip
+CS781-CP-Wren-Oswin-261110073-report_code/

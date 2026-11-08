@@ -1,0 +1,14 @@
+{
+ "members": [
+  "C:\\kaggle\\working\\cs781\\phase4\\runs\\J1_A_lorma\\A_d768_lorma_09e521",
+  "C:\\kaggle\\working\\cs781\\phase4\\runs\\J4_D_partial\\D_d560_partial_029156"
+ ],
+ "threshold": 0.45000000000000007,
+ "val": {
+  "macro_f1": 0.7486,
+  "macro_p": 0.7533,
+  "macro_r": 0.7495,
+  "acc": 0.7495,
+  "pred_pos": 0.5614
+ }
+}

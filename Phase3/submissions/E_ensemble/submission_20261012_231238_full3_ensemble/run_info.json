@@ -1,0 +1,11 @@
+{
+ "name": "full3_ensemble",
+ "runs": [
+  "C:\\kaggle\\working\\cs781\\phase3\\runs\\R1_A_lorma\\A_d768_lorma_w_all_aea4b0",
+  "C:\\kaggle\\working\\cs781\\phase3\\runs\\R5_D_prefix\\D_d560_prefix_w_all_bc6a76",
+  "C:\\kaggle\\working\\cs781\\phase3\\runs\\R6_KD\\A_d560_full_w_all_324fae"
+ ],
+ "dev_macro_f1_all": null,
+ "dev_macro_f1_present": null,
+ "decoding": "argmax of averaged CRF marginals"
+}

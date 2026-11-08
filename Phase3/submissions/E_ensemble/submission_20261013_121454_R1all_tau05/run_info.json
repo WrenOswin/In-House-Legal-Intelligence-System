@@ -1,0 +1,10 @@
+{
+ "name": "R1all_tau05",
+ "runs": [
+  "C:\\kaggle\\working\\cs781\\phase3\\runs\\R1_A_lorma\\A_d768_lorma_w_all_aea4b0"
+ ],
+ "dev_macro_f1_all": null,
+ "dev_macro_f1_present": null,
+ "tau": 0.5,
+ "decoding": "argmax of averaged CRF marginals - 0.5 * log prior"
+}

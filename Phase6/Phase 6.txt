@@ -1,0 +1,327 @@
+Phase 6
+
+Abstractive Summarization - 27 Oct to 2 Nov 2026 (deadline 2 Nov 23:59)
+
+
+==========================================================================================
+PHASE 6 SUMMARY - one abstractive summary per legal judgment, BERTScore F1
+==========================================================================================
+Task: generate a concise abstractive summary for each of the 100 test judgments.
+Metrics: BERTScore F1 (primary), ROUGE-1 F1, ROUGE-L F1. Output: prediction.json =
+[{"id": ..., "summary": "..."}, ...] (list format), exactly one summary per test id, zipped.
+Rules (capstone doc section 12.2): start from the Phase-1 models (ALL FOUR architectures); >= 4 substantially
+different experiments: >= 3 different fine-tuning/PEFT techniques from the 12.2.1 list (LoRMA compulsory)
++ >= 1 knowledge distillation (larger teacher -> smaller student). Minimum 6 valid submissions (README).
+STATUS 2026-10-29: PHASE 6 DONE - 7 runs = 7 valid Codabench submissions (scores below). Requirements met by
+S1-S5 (all four architectures; LoRMA, LoRA, Houlsby adapters, Pfeiffer adapters + knowledge distillation).
+Stopped at S7 by the user's choice. BEST: S1_A_lorma, BERTScore F1 0.8424.
+
+  Submission          Arch / technique                              params (trainable)  Codabench  | val ROUGE-1 ROUGE-2 ROUGE-L words
+                                                                                        BERTScore F1
+  S1_A_lorma          A d768, LoRMA+ r=16 (compulsory, KD teacher)  143.98M (3.83M)     0.8424     | 0.4723  0.2379  0.2526  382  <- BEST
+  S6_A_full_noKD      A d560, full FT, no teacher (KD baseline)     58.07M (58.07M)     0.8379     | 0.4585  0.2236  0.2460  385
+  S5_KD               A d560, sequence-level KD from S1             58.07M (58.07M)     0.8346     | 0.4261  0.2032  0.2368  350
+  S3_C_houlsby        C d560, Houlsby adapters b=128                60.38M (2.31M)      0.8309     | 0.4312  0.1931  0.2302  397
+  S2_D_lora           D d560, LoRA r=16, selected context           55.70M (1.40M)      0.8246     | 0.3881  0.1474  0.2151  358
+  S7_D_lora_head      D d560, LoRA r=16, first-tokens context       55.70M (1.40M)      0.8229     | 0.3874  0.1435  0.2146  365
+  S4_B_fid_pfeiffer   B d512 enc-dec, FiD 3x512 + Pfeiffer b=128    74.60M (1.58M)      0.8162     | 0.3740  0.1229  0.2100  430
+  reference (no Phase-1 model): lead-500 words 0.464 / 0.224 / 0.230; selected-500 words 0.540 / 0.310 / 0.303
+  Val = 300 held-out train docs, ROUGE F1 (rouge_score, no stemmer); no local BERTScore (needs a pretrained
+  RoBERTa). Codabench BERTScore = 100 test docs (uploaded 2026-10-27..29 in the order S1, S6, S3, S5, S2, S7, S4).
+
+
+------------------------------------------------------------------------------------------
+1. DATA
+------------------------------------------------------------------------------------------
+- 2026-10-25: Phase_6_Summ/Train/train.json (211 MB) downloaded from HF into
+  C:\kaggle\working\cs781\hf_data\Phase_6_Summ\Train; Test/test.json (2.7 MB) was already there from
+  2026-09-30 and is byte-identical to the current HF version.
+- No dev split is given (doc 12.3.2) -> val = 300 train docs held out (summ.build_splits, seed 6; only docs
+  whose text occurs once in train and whose summary has >= 30 words). Train = the other 6,730.
+- Analysis script: Phase6\analysis\summ_eda.py; full output: Phase6\analysis\data_eda.txt.
+
+
+------------------------------------------------------------------------------------------
+2. DATA ANALYSIS (2026-10-25)
+------------------------------------------------------------------------------------------
+Sizes and fields
+  train 7,030 docs (id, document, summary) | test 100 (id, document - no summary). Ids unique, 27 duplicated
+  document texts inside train, no test document occurs in train. Supreme Court judgments with headnote-style
+  summaries (IN-Abs style: facts, question, holding).
+
+Length (whitespace words)
+               p10    p25   median   p75    p90    p99     max      mean
+  train doc   1,348  2,018  3,145   4,984  7,851  24,147  139,645  4,376
+  train summ    292    421    639     963  1,502   4,301   27,768    843
+  val doc     1,354  1,973  2,983   4,897  7,705  25,821   45,845  4,211
+  val summ      299    421    610     942  1,439   2,526    6,697    777
+  test doc    1,504  2,100  3,171   5,408  8,563  29,199   39,695  4,783
+  summary / document = 22% (median). Phase-1 BPE: 1.17 tokens per word (both tokenizers) -> median doc
+  ~3.7k tokens, median summary ~750 tokens. Neither fits a 1,024/2,048-token window together.
+
+Abstractiveness and where the content comes from
+  33% of the summary word bigrams do not occur in the document (median 31%) -> the headnotes reuse much of
+  the judgment's wording but rephrase and compress.
+  Sentence salience (share of a sentence's content words that reappear in the summary) by position decile:
+  0.22 0.41 0.46 0.48 0.48 0.48 0.48 0.49 0.51 0.47 -> the first 10% (case number, counsel, judge names) is
+  the least used; the rest of the judgment matters about equally (facts, arguments AND final reasoning).
+
+Information lost by truncation (coverage of the reference's content-word types by the model input, val)
+  whole document 0.897
+  budget (words)   400     800     1,200   1,600
+  head            0.293   0.452   0.569   0.650
+  select          0.375   0.533   0.639   0.708      (importance-based selection, see 4)
+  -> truncating to the first ~1.3k tokens loses ~40% of the summary's content words; selection recovers
+  about a fifth of that loss at the same budget.
+
+Extractive reference points (no Phase-1 model, NOT submissions; ROUGE F1 on val, rouge_score, no stemmer)
+                    ROUGE-1  ROUGE-2  ROUGE-L
+  lead-300 words     0.365    0.160    0.184
+  select-300 words   0.453    0.254    0.263
+  lead-500 words     0.464    0.224    0.230
+  select-500 words   0.540    0.310    0.303
+  lead-700 words     0.498    0.254    0.253
+  select-700 words   0.563    0.335    0.316
+  Longer outputs get higher ROUGE F1 up to the reference length (median ~610 words).
+
+
+------------------------------------------------------------------------------------------
+3. PIPELINE (2026-10-25; plan: Phase6\Phase6_Plan.md)
+------------------------------------------------------------------------------------------
+- Folder layout as Phases 4-5: Phase6\{src, analysis, submissions\<EXP>\submission_<stamp>_<RUN_ID>};
+  big files in C:\kaggle\working\cs781\phase6\{cache, runs\<EXP>\<RUN_ID>, logs}. Python: the .venv
+  (torch 2.14 cu132). New metric dependency: rouge-score (pip, metric only).
+- src\summ.py: splits, sentence splitter (legal abbreviations No./S./Art./J. etc. kept together, sentences
+  > 1,200 chars cut), per-sentence BPE token cache for both tokenizers (build_cache.py, ~70 s per split),
+  context selection (head / headtail / select), FiD chunks, salience model, ROUGE / repetition / coverage,
+  submission writer (list format + zip with prediction.json at the root).
+- src\seq2seq.py: Summarizer for all four architectures, built on the unchanged Phase-1 weights:
+    A, C, D: <|bos|> source <|sep|> summary <|endoftext|>, loss on summary tokens only (A/D causal as
+             pretrained; C prefix-LM: bidirectional source + segment embedding 0/1; D keeps its 256-token
+             sliding-window layers + 2 global layers)
+    B:       encoder-decoder as Fusion-in-Decoder: each 512-token source chunk encoded separately (encoder max
+             768), decoder <|bos|> summary cross-attends to all chunk encodings
+  RoPE position interpolation (positions / 2) for A and C (pretrained 1,024 -> 2,048 = 1,533 source + 512
+  summary) and for B's decoder (256 -> 512). Own forward passes -> logits only on summary positions,
+  Houlsby adapters, batched left-padded KV-cache generation (greedy/sampling, repetition penalty,
+  no-repeat-n-gram, min/max new tokens).
+  Checked (src\check_seq2seq.py): teacher-forced loss identical to the original Phase-1 models for A, B, C, D
+  (e.g. A d560 2.32700 vs 2.32700); batched cached greedy generation identical to naive greedy in fp32. In
+  bf16, D once flipped a near-tie (p 0.1512 vs 0.1500) - rounding, not a bug.
+- src\train.py (driver), run.py (one JSON config), run_queue.py (S1-S7), teacher_gen.py (KD data),
+  decode_sweep.py (decoding study / decoding-variant submissions).
+- Training: AdamW, cosine schedule with 5% warmup, 16 docs per step, micro-batches <= 4,096 tokens, bf16
+  autocast, no activation checkpointing (faster, peak 4.2 GB for A d768). Model selection by teacher-forced
+  val loss on all 300 val docs, twice per epoch, patience 3. At the end: best checkpoint generates val
+  summaries (ROUGE-1/2/L, words, 4-gram repetition) and test summaries (submission).
+  Default decoding: greedy, max_new 512, min_new 200, no-repeat-4-gram, no repetition penalty.
+- Laptop safety as Phase 5: duty 0.6 (GPU sleeps 40% of the time), below-normal priority, 2 CPU threads,
+  vram_fraction 0.75.
+
+Throughput pilots (duty 1.0, A d768 LoRMA, 160 docs at 2,048 tokens):
+  grad ckpt on, 8,192-token micro-batches: 14.4k tok/s, 1.8 GB | off, 4,096: 20.9k tok/s, 4.2 GB |
+  off, 8,192: 19.6k tok/s, 7.6 GB -> off / 4,096 is the default.
+
+LR pilots (800 train docs, 1 epoch = 50 steps, duty 1.0, val loss on 300 val docs; ROUGE on 32 val docs,
+max_new 256):
+  A d768 LoRMA r=16   untrained val loss 2.6406 (300 val docs; 2.6315 on the 32-doc debug subset)
+    lr 1e-4: val 2.1898 (25 steps) 2.1399 (50) | R1 0.341 RL 0.198
+    lr 3e-4: val 2.0822 2.0487                 | R1 0.328 RL 0.200
+    lr 1e-3: val 2.0455 2.0024                 | R1 0.345 RL 0.200
+    -> higher lr learns faster on this short horizon; 5e-4 chosen for the 3-epoch run (cosine decay).
+  D d560 LoRA r=16    untrained val loss 3.2608
+    lr 3e-4: val 3.1568 3.1455                 | R1 0.282 RL 0.179
+    lr 1e-3: val 3.1388 3.1237                 | R1 0.293 RL 0.179   -> 1e-3
+  C d560 Houlsby b=128 untrained val loss 3.4792
+    lr 3e-4: val 3.2523 3.2261                 | R1 0.291 RL 0.175
+    lr 1e-3: val 3.1689 3.1384                 | R1 0.305 RL 0.185   -> 1e-3
+  B d512 Pfeiffer b=128 + FiD  untrained val loss 3.6205
+    lr 3e-4: val 3.5019 3.4854                 | R1 0.275 RL 0.174
+    lr 1e-3: val 3.4401 3.4229                 | R1 0.274 RL 0.173   -> 1e-3
+  A d560 full FT      untrained val loss 3.2041
+    lr 5e-5: val 2.7050 2.6600                 | R1 0.328 RL 0.195
+    lr 2e-4: val 2.7177 2.6189                 | R1 0.319 RL 0.193   -> 1e-4 for 3 epochs (full FT overfits sooner)
+  (val losses are only comparable within a tokenizer: A d768 uses 35k BPE, the others 32k.)
+  Ranking after 50 steps matches Phase 1: A d768 >> A d560 full FT > C ~ D > B. Full FT moves the 58M A far
+  more (3.20 -> 2.62) than adapters/LoRA move C/D/B (-0.14 to -0.34).
+
+
+------------------------------------------------------------------------------------------
+4. EXPERIMENTS
+------------------------------------------------------------------------------------------
+Long-document strategy (all runs): importance-based context selection. summ.Salience = ridge regression
+on hashed word uni+bigram TF-IDF (2^18 features) + 20 position bins, first/last-sentence flags and length,
+fitted on 4,000 train docs to predict each sentence's salience (see 2); top sentences kept in document order
+until the source budget is full (first sentence always kept). Plus RoPE interpolation (A, C) and FiD (B).
+
+  Run  Arch / technique                                         purpose
+  S1   A d768 140M, LoRMA+ r=16 (compulsory), lr 5e-4            KD teacher
+  S2   D d560 54M, LoRA r=16                                     native 2k window
+  S3   C d560 58M, Houlsby adapters b=128 (+ norms)              prefix-LM (bidirectional source)
+  S4   B d512 42M enc-dec, Pfeiffer adapters b=128 + FiD 3x512   hierarchical encoder-decoder
+  S5   A d560 58M, sequence-level KD from S1 (full FT student)   mandatory KD
+  S6   A d560 58M, full FT on references only (optional)         KD baseline
+  S7   D d560, LoRA, first-tokens context (optional)             long-document strategy ablation
+  KD: the 140M teacher (35k BPE) and the 58M students (32k BPE) do not share a tokenizer, so token-level
+  logit KD is impossible -> sequence-level KD (Kim & Rush 2016): S1 summarizes every train doc
+  (teacher_gen.py); the student's target is the teacher summary with probability 0.5, else the reference.
+
+
+------------------------------------------------------------------------------------------
+5. RUNS
+------------------------------------------------------------------------------------------
+2026-10-25 18:11  queue started: run_queue.py S1 TG S5 S2 S3 S4 S6 S7 (log: phase6\logs\queue_1.txt)
+  lr: S1 5e-4 | S2-S4 1e-3 | S5/S6 1e-4. 3 epochs (1,263 steps of 16 docs), duty 0.6.
+  (first start crashed at step ~80: 2 train docs have an empty summary -> excluded; train = 6,728 docs.)
+
+S1 A d768 LoRMA+ r=16 alpha 32, lr 5e-4 (run A_d768_lorma_224697) - DONE 2026-10-25 19:06
+  params 143.98M, trainable 3.83M (2.7%) on 48 linear layers.
+  val loss: 2.6406 (untrained) 1.9153 (ep 0.5) 1.8762 (1) 1.8662 (1.5) 1.8494 (2, best) 1.8514 (2.5)
+  1.8495 (3) - converged after 2 epochs; train loss 1.65 at the end (mild overfitting from epoch 2.5).
+  val generation (300 docs, default decoding): ROUGE-1 0.4723 | ROUGE-2 0.2379 | ROUGE-L 0.2526 |
+  382 words | 4-gram repetition 0.0004. Above lead-500 words (0.464 / 0.224 / 0.230) with fewer words,
+  below the extractive select-500 reference (0.540 / 0.310 / 0.303).
+  train 44.9 min, 14.8k tok/s, peak VRAM 4.27 GB, val generation 246 s, test 92 s; test 375 words/summary.
+  Sample (test 4963): fluent headnote style, correct facts (assessee, wealth tax, accrued interest,
+  cash system of accounting, Tribunal / High Court steps), but local loops ("for the assessment years
+  1965 66 ... for the assessment for the assessment Years") and a garbled amount ("Rs. I,50,500").
+  submission: submissions\S1_A_lorma\submission_20261025_190609_A_d768_lorma_224697
+
+TG teacher generation (teacher_gen.py on S1, all 6,730 train docs) - DONE 20:41 (~95 min at duty 0.6,
+  batches of 16, default decoding). Teacher summaries: median 415 words (p5 210, p95 457), none < 50 words
+  -> runs\S1_A_lorma\A_d768_lorma_224697\train_gen.json.
+
+S5 A d560 full FT + sequence-level KD from S1 (kd_mix 0.5), lr 1e-4 (run A_d560_full_kd_89ff30) - DONE 21:42
+  params 58.07M, all trainable (40% of the teacher's 143.98M).
+  val loss on REFERENCES (32k BPE, not comparable with S1's 35k): 3.2041 (untrained) 2.4501 (ep 0.5) 2.3437 (1)
+  2.2847 (1.5) 2.2311 (2) 2.2170 (2.5) 2.2100 (3, best) - still improving at the end. Train loss 1.47 is
+  lower than val because half the targets are teacher summaries (lower entropy, easier to predict).
+  val generation (300 docs): ROUGE-1 0.4261 | ROUGE-2 0.2032 | ROUGE-L 0.2368 | 350 words | rep4 0.0005
+  -> 90% of the teacher's ROUGE-1 (0.4723) and 94% of its ROUGE-L (0.2526) at 40% of the parameters.
+  train 55.6 min, 11.9k tok/s, peak VRAM 4.89 GB (full FT: AdamW states), val generation 195 s (teacher 246 s),
+  test 67 s (teacher 92 s); test 353 words/summary.
+  submission: submissions\S5_KD\submission_20261025_214229_A_d560_full_kd_89ff30
+
+S2 D d560 LoRA r=16, lr 1e-3 (run D_d560_lora_7d36cd) - DONE 22:23
+  params 55.70M, trainable 1.40M (2.5%) on 40 linear layers. Native 2,048 window (no RoPE scaling).
+  val loss: 3.2608 (untrained) 3.0798 3.0470 3.0290 3.0015 2.9945 2.9917 (ep 0.5 ... 3, best at the end).
+  val generation (300 docs): ROUGE-1 0.3881 | ROUGE-2 0.1474 | ROUGE-L 0.2151 | 358 words | rep4 0.0015
+  train 34.2 min, 19.4k tok/s, peak VRAM 3.15 GB, val generation 274 s (slowest: dense masks at decode),
+  test 99 s; test 360 words/summary.
+  LoRA on the 54M D moves its val loss only -0.27 (full-FT A d560 in S5: -0.99) -> clearly below S5 (0.426).
+  submission: submissions\S2_D_lora\submission_20261025_222320_D_d560_lora_7d36cd
+
+S3 C d560 Houlsby adapters b=128, lr 1e-3 (run C_d560_houlsby_5daabe) - DONE 23:21
+  params 60.38M, trainable 2.31M (3.8%): adapters after attention and FFN in 8 blocks + RMSNorm weights.
+  val loss: 3.4792 (untrained) 2.9463 2.7994 2.7113 2.6696 2.6509 2.6468 (ep 0.5 ... 3, best at the end).
+  The prefix-LM starts worst (3.48: never pretrained on a causal summary after a long prefix) but adapters
+  move it -0.83 (D LoRA -0.27).
+  val generation (300 docs): ROUGE-1 0.4312 | ROUGE-2 0.1931 | ROUGE-L 0.2302 | 397 words | rep4 0.0017
+  train 52.9 min, 12.5k tok/s, peak VRAM 4.06 GB (dense [T,T] prefix mask), val generation 214 s, test 78 s;
+  test 399 words/summary.
+  Best of the 58M-class PEFT runs: above S5 KD on ROUGE-1 (0.431 vs 0.426), below on ROUGE-2/L
+  (0.193 / 0.230 vs 0.203 / 0.237); 47 more words per summary explain part of the ROUGE-1 edge.
+  submission: submissions\S3_C_houlsby\submission_20261025_232143_C_d560_houlsby_5daabe
+
+S4 B d512 FiD 3x512 + Pfeiffer adapters b=128, lr 1e-3 (run B_d512_pfeiffer_da0246) - DONE 23:44
+  params 74.60M (encoder + decoder; Phase 5 used the encoder only, 41.75M), trainable 1.58M (2.1%):
+  adapters after the FFN of all 6 encoder + 6 decoder blocks.
+  val loss: 3.6205 (untrained) 3.3339 3.2999 3.2820 3.2702 3.2650 3.2635 (ep 0.5 ... 3) - flattening.
+  val generation (300 docs): ROUGE-1 0.3740 | ROUGE-2 0.1229 | ROUGE-L 0.2100 | 430 words | rep4 0.0017
+  train 19.7 min, 33.7k tok/s, peak VRAM 1.51 GB (each 512 chunk attends only within itself), val
+  generation 137 s, test 52 s (fastest) -> FiD is the cheapest long-input model; test 426 words/summary.
+  Weakest run, as B was weakest in Phase 1 (decoder pretrained on 256-token continuations only).
+  submission: submissions\S4_B_fid_pfeiffer\submission_20261025_234458_B_d512_pfeiffer_da0246
+
+REQUIRED SET COMPLETE (2026-10-25 23:44): S1-S5 = all four architectures; LoRMA, LoRA, Houlsby adapters,
+Pfeiffer adapters + sequence-level KD; 5 validated submission zips. S6 (KD baseline) and S7 (head context)
+follow.
+
+S6 A d560 full FT on references only (KD baseline), lr 1e-4 (run A_d560_full_d6f92e) - DONE 2026-10-26 00:45
+  val loss: 3.2041 (untrained) 2.3884 2.2838 2.2333 2.1947 (ep 2, best) 2.2041 2.2011 - overfits after
+  epoch 2 (S5 with teacher targets was still improving at epoch 3: 2.2100).
+  val generation (300 docs): ROUGE-1 0.4585 | ROUGE-2 0.2236 | ROUGE-L 0.2460 | 385 words | rep4 0.0007
+  train 55.2 min, 12.0k tok/s, peak VRAM 4.89 GB, val generation 199 s, test 73 s; test 381 words/summary.
+  => KD DID NOT HELP in Phase 6: the same 58M student without the teacher beats the KD student S5 by
+  +0.032 ROUGE-1 / +0.020 ROUGE-2 / +0.009 ROUGE-L, and reaches 97% of the 140M teacher's ROUGE-1
+  (0.4585 vs 0.4723) at 40% of the parameters. Opposite of Phases 4-5 (KD student > no-teacher student).
+  Likely reason: sequence-level KD copies the teacher's errors - S1 summaries are shorter (median 415 vs
+  639 words), cover less of the reference, and ~30% of their numbers are not in the source (see analysis);
+  replacing half the references with them removes real signal. (Phases 4-5 distilled soft labels on a
+  classification task, which carry the teacher's uncertainty instead of its mistakes.)
+  submission: submissions\S6_A_full_noKD\submission_20261026_004518_A_d560_full_d6f92e
+
+S7 D d560 LoRA r=16 with the FIRST 1,533 tokens as context (long-doc ablation of S2; run D_d560_lora_65102e)
+  - DONE 01:26
+  val loss: 3.2589 (untrained) 3.0764 3.0385 3.0184 2.9881 2.9801 2.9765 (ep 0.5 ... 3) - slightly BELOW
+  S2 (2.9917) at every eval.
+  val generation (300 docs): ROUGE-1 0.3874 | ROUGE-2 0.1435 | ROUGE-L 0.2146 | 365 words | rep4 0.0016
+  vs S2 (selection): 0.3881 / 0.1474 / 0.2151 -> the same within noise (-0.001 / -0.004 / -0.001).
+  train 34.6 min, 19.2k tok/s, peak VRAM 3.15 GB, val generation 261 s, test 95 s; test 377 words/summary.
+  => Importance-based selection gives the input +7 points of reference coverage (section 2) but the D LoRA
+  model does not turn it into better summaries; a contiguous opening reads more naturally (lower loss) and
+  the model can only use a small part of either context (coverage of its outputs 0.14 for both).
+  submission: submissions\S7_D_lora_head\submission_20261026_012617_D_d560_lora_65102e
+
+QUEUE DONE 2026-10-26 01:26. 7 runs = 7 validated submission zips (prediction.json only, 100 test ids in
+test.json order, one non-empty summary each). The user decided to stop at S7 (no decoding-variant
+submissions, decode_sweep.py not run).
+
+Analysis (analysis\analyze.py -> analysis\results.md / results.csv, 300 val docs):
+  run   coverage  novel bigr.  num. halluc.  rep4    R1 short / mid / long reference
+  S1    0.273     0.329        0.305         0.0004  0.517 / 0.511 / 0.389
+  S6    0.255     0.365        0.475         0.0007  0.493 / 0.505 / 0.378
+  S5    0.225     0.401        0.527         0.0005  0.464 / 0.471 / 0.343
+  S3    0.211     0.422        0.585         0.0017  0.455 / 0.476 / 0.362
+  S2    0.142     0.529        0.697         0.0015  0.410 / 0.431 / 0.323
+  S7    0.141     0.536        0.688         0.0016  0.407 / 0.430 / 0.325
+  S4    0.125     0.580        0.788         0.0017  0.370 / 0.422 / 0.330
+  refs  1.000     0.271        0.176         0.0381
+  coverage = share of the reference's content words in the output; novel bigrams = generated bigrams not in
+  the document (token-level here, so the references show 0.27 instead of the 0.33 type-level value in 2);
+  num. halluc. = share of numbers (>= 2 digits) in the output that never occur in the document (factuality
+  proxy; the references' 0.18 is formatting/rounding, e.g. amounts written differently).
+
+
+------------------------------------------------------------------------------------------
+6. OBSERVATIONS
+------------------------------------------------------------------------------------------
+1. Truncation loses a lot: the first ~1.3k tokens of a judgment contain only ~57% of the summary's content
+   words (whole doc 90%); importance-based selection raises this to ~64% at the same budget.
+2. ...but better input coverage did not give better summaries: S7 (first tokens) = S2 (selected sentences)
+   on every metric (ROUGE-1 0.387 vs 0.388). The bottleneck is the model, not the input selection.
+3. Model scale and the Phase-1 representations dominate: ranking A d768 (0.472) > A d560 full FT (0.459) >
+   C Houlsby (0.431) > A d560 KD (0.426) > D LoRA (0.388) > B FiD (0.374) - the Phase-1 order A > C/D > B
+   again. The Phase-1 LMs are useful: S1 beats the lead-500 extractive baseline (0.464) with fewer words.
+4. Parameter-efficient vs full: 3.8M trainable LoRMA parameters on the 140M A beat full FT of the 58M A
+   (0.472 vs 0.459); for the 54-60M models, PEFT runs moved val loss much less than full FT (D LoRA -0.27,
+   C Houlsby -0.83, A d560 full FT -1.01).
+5. Knowledge distillation (sequence-level) did NOT help: KD student S5 0.426 vs the same student without a
+   teacher S6 0.459. It keeps 90% of the teacher's ROUGE-1 at 40% of the parameters and 79% of its
+   generation time, but S6 keeps 97% with no teacher. Teacher summaries are shorter and contain
+   hallucinated numbers (31% of the teacher's numbers are not in the source) - the student inherits them
+   (S5 0.527 vs S6 0.475). Opposite of Phases 4-5, where soft-label KD on classification helped.
+6. Faithfulness follows quality: the better the model, the more it copies from the source (novel bigrams
+   0.33 for S1 vs 0.58 for S4) and the fewer numbers it invents (0.31 vs 0.79). "Abstractive" text from the
+   weaker models is mostly hallucination.
+7. Redundancy is low: no-repeat-4-gram decoding keeps repeated 4-grams at 0.04-0.17% (references 3.8%,
+   because legal phrases recur) and no sentence is repeated; local loops still appear (S1 sample).
+8. Long references are hardest: ROUGE-1 drops by ~0.12 for the longest third of references, since outputs
+   are capped at 512 tokens (~440 words) while those references have > ~800 words.
+9. Cost: B FiD is cheapest (19.7 min, 1.5 GB, fastest generation) but weakest; S1 needs 4.3 GB and 45 min
+   with only 2.7% trainable parameters; full FT of a 58M model needs the most VRAM (4.9 GB, optimizer states).
+10. Codabench BERTScore F1 (test) confirms the val ranking: S1 0.8424 > S6 0.8379 > S5 0.8346 > S3 0.8309 >
+   S2 0.8246 > S7 0.8229 > S4 0.8162. It follows val ROUGE-L (and ROUGE-2) EXACTLY; the only swap against
+   val ROUGE-1 is S5 > S3 - the KD student's shorter (350 words), more extractive output wins on meaning
+   overlap even though S3 covers more reference words. So local ROUGE-L was a reliable proxy for BERTScore.
+11. BERTScore compresses differences: 0.016 between best and worst (ROUGE-1 spread 0.098), since any fluent
+   legal text already gets a high contextual-embedding similarity. KD still loses to plain full FT on the
+   test (S5 0.8346 vs S6 0.8379), and selection vs first tokens stays a tie (S2 0.8246 vs S7 0.8229).
+
+
+------------------------------------------------------------------------------------------
+7. NEXT STEPS
+------------------------------------------------------------------------------------------
+- DONE 2026-10-29: all 7 zips uploaded to Codabench and scored (table at the top, observations 10-11).
+  No further submissions (user's decision).
+- AI-assisted (for the LLM Declaration): data download, analysis, plan, all Phase6\src code and this log (Claude).

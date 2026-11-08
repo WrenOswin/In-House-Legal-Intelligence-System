@@ -1,0 +1,284 @@
+Phase 2
+
+Legal Named Entity Recognition (L-NER) - 7 to 11 Oct 2026 (deadline 11 Oct 23:59 IST)
+
+
+==========================================================================================
+PHASE 2 SUMMARY - character-span legal NER, 12 labels, strict macro-F1
+==========================================================================================
+Task: predict [start_char, end_char, LABEL] per entity; exact start+end+label match only.
+Rules: start from the Phase-1 models (ALL FOUR architectures); >= 4 substantially different
+experiments: >= 3 different fine-tuning/PEFT techniques (LoRMA compulsory) + >= 1 knowledge
+distillation. Minimum 4 valid submissions (older text in the doc still says 6 - aim for 6+).
+Plan: Phase2_Plan.md. Hardware: same laptop (RTX 5070 Ti 12 GB), .venv kernel.
+
+
+------------------------------------------------------------------------------------------
+1. EXPERIMENTS
+------------------------------------------------------------------------------------------
+  E1  A d768 (140.2M)       full fine-tuning + CRF     (teacher for E6)
+  E2  A d768                LoRMA+ (multiplicative low-rank, Bihany/Patel/Modi 2025)
+  E3  B encoder (~41M)      LoRA
+  E4  C prefix-LM (58.1M)   Pfeiffer adapters
+  E5  D efficient (54.3M)   partial / layer-wise fine-tuning (or BitFit), 2048 context
+  E6  A d560 (58.1M)        knowledge distillation from E1 (teacher/student tokenizers differ -> aligned by char offsets)
+  Shared pipeline: Phase2\src (run with run.py or the notebooks in Phase2\notebooks).
+
+
+------------------------------------------------------------------------------------------
+2. DATA (measured 2026-10-07)
+------------------------------------------------------------------------------------------
+- Train: fold1 35 + fold2 35 = 70 docs, 8,393 entities (~120 per doc). Test: fold3, 35 docs.
+- Test doc 1305957 is EMPTY -> must still appear in prediction.json with [].
+- Doc length: train 10,443-114,044 chars (median 26,620); test 0-97,103 (median 28,019).
+- Tokens with the Phase-1 BPE: v35k 2,173-23,883 per doc (median 5,592), 464k in total;
+  v32k almost identical (466k). ~4.8 chars per token. -> every doc needs sliding windows.
+- Gold format: [start, end, label, text]; text == doc[start:end] for all 8,393; no overlapping spans;
+  16 spans have whitespace at an edge.
+
+  Label       count  docs  median len (chars)  max len  median position in doc
+  DATE         1575    70        10              28        0.29
+  STAT         1260    65        14             233        0.43
+  PREC         1183    66        31             195        0.56
+  COURT        1013    66        10              59        0.43
+  AUTH         1003    43        13              89        0.53
+  CASENO        760    65        20              91        0.23
+  APP           407    63        14              46        0.15
+  RESP          381    63        14              83        0.19
+  JUDGE         245    66        13              32        0.27
+  A.COUNSEL     195    49        12              26        0.17
+  WIT           187    12        11              23        0.31
+  R.COUNSEL     184    47        12              29        0.24
+
+- Validation split (data/val_split.json): doc-level 56 train / 14 val, seed 1312, chosen so every
+  label has 17-23% of its mentions in val and >= 2 WIT docs are in val.
+
+
+------------------------------------------------------------------------------------------
+3. RESULTS
+------------------------------------------------------------------------------------------
+  Validation = 14 held-out training docs (data/val_split.json); strict macro-F1 as on Codabench.
+  2026-10-09 (each run ~3-7 min on the laptop GPU; early stopping on val macro-F1):
+
+  Exp  Backbone     Method                       Attention  Trainable      Val macro-F1  micro-F1
+  E1   A d768 140M  full fine-tuning             bidir      140.2M (100%)  0.4728        0.5696
+  E1   A d768       full fine-tuning             causal     140.2M (100%)  0.5048        0.5789
+  E2   A d768       LoRMA+ r=8 (qkv,proj,w12)    bidir        1.9M (1.4%)  0.4802        0.5774
+  E3   B enc 42M    LoRA r=8                     bidir        0.5M (1.2%)  0.3198        0.4788
+  E4   C 58M        Pfeiffer adapters (64)       bidir        0.6M (1.0%)  0.4030        0.5299
+  E5   D 54M        partial FT (top 4/8 blocks)  bidir       18.2M (34%)   0.4266        0.5644
+  Gold -> BIO -> spans round trip (ceiling of the token pipeline): macro-F1 0.9944.
+  Submissions written (not uploaded yet): E1 bidir, E2, E3, E4, E5 in Phase2\submissions\<exp>\.
+
+  Second batch (2026-10-09, header context = doc's first 256 tokens prepended to every later window):
+  E1   A d768       full fine-tuning, header 256  causal     140.2M (100%)  0.4916        0.5720
+  E2   A d768       LoRMA+ r=8                    causal       1.9M (1.4%)  0.5074        0.5628
+  E2   A d768       LoRMA+ r=8, header 256        causal       1.9M (1.4%)  0.4870        0.5512
+  E5   D 54M        partial FT (top 4/8 blocks)   causal      18.2M (34%)   0.4614        0.5325
+
+  Knowledge distillation (E6), teacher = E1 causal (A d768, 140.2M, val 0.5048), student = A d560 (58.1M),
+  loss = 0.5 * CE(gold) + 0.5 * T^2 * KL(teacher || student), T = 2; teacher/student tokenizers differ
+  (v35k vs v32k) -> soft targets aligned by character offsets (99.9% of student tokens aligned):
+  Model                       Params   Val macro-F1  micro-F1  best ep  train min  peak VRAM  val infer
+  teacher A d768 (E1 causal)  140.2M   0.5048        0.5789     5       4.5        4.73 GB    2.6 s
+  student alone (4a48da)       58.1M   0.4510        0.5441     5       4.9        3.44 GB    3.1 s
+  student + KD (35adb4)        58.1M   0.4771        0.5640    11       7.1        3.44 GB    3.1 s
+
+  Cleanup (2026-10-09): the header-context runs and the bidirectional E2/E5 runs were deleted (runs and
+  submissions); their numbers above are kept as findings. The header option, LoRMA-pi, BitFit and Houlsby
+  adapters were removed from the code (never part of a kept result).
+
+  Kept submissions (Phase2\submissions):
+    E1  submission_20261009_125313_A_d768_full_8fcd22    full FT, bidirectional   val 0.4728  UPLOADED 0.4807
+    E1  submission_20261009_174412_A_d768_full_5c4900    full FT, causal          val 0.5048  UPLOADED 0.4790
+    E2  submission_20261009_174435_A_d768_lorma_684310   LoRMA, causal            val 0.5074  UPLOADED 0.5090
+    E3  submission_20261009_131211_B_d512_lora_e60be9    LoRA (B encoder)         val 0.3198  UPLOADED 0.3631
+    E4  submission_20261009_131741_C_d560_adapter_16dd38 adapters (C)             val 0.4030  UPLOADED 0.4019
+    E5  submission_20261009_174452_D_d560_partial_c656f6 partial FT (D), causal   val 0.4614  UPLOADED 0.4628
+    E6  submission_20261009_175450_A_d560_full_kd_35adb4  KD student (A d560)      val 0.4771  UPLOADED 0.4684
+    E2  submission_20261009_180517_A_d768_lorma_all_afa815 LoRMA retrained on all 70 docs (6 ep)  -  UPLOADED 0.4877
+    E2  submission_20261009_192755_A_d768_lorma_684310_wordsnap  best LoRMA model + word snapping  val 0.5185  UPLOADED 0.5174
+    (all other submissions were decoded WITHOUT word snapping - it was added after they were made)
+    E7  submission_20261009_204219_ens3_roles_propnames   ensemble + roles + name propagation  val 0.5891  UPLOADED 0.5590  <- BEST
+    E7  submission_20261009_204225_ens3_roles             ensemble + roles                     val 0.5622  UPLOADED 0.5535
+
+  Codabench (strict macro-F1 on the 35 test docs):
+  Exp  Submission                                              Val      Codabench
+  E1   submission_20261009_125313_A_d768_full_8fcd22           0.4728   0.4807   (A full FT, bidirectional)
+  E1   submission_20261009_174412_A_d768_full_5c4900           0.5048   0.4790   (A full FT, causal)
+  E2   submission_20261009_174435_A_d768_lorma_684310          0.5074   0.5090   (A LoRMA r=8, causal)
+  E2   submission_20261009_180517_A_d768_lorma_all_afa815      -        0.4877   (same, retrained on all 70 docs, 6 epochs)
+  E3   submission_20261009_131211_B_d512_lora_e60be9           0.3198   0.3631   (B encoder 42M, LoRA r=8)
+  E4   submission_20261009_131741_C_d560_adapter_16dd38        0.4030   0.4019   (C prefix-LM 58M, Pfeiffer adapters)
+  E5   submission_20261009_174452_D_d560_partial_c656f6        0.4614   0.4628   (D efficient 54M, partial FT top 4/8, causal)
+  E6   submission_20261009_175450_A_d560_full_kd_35adb4        0.4771   0.4684   (A d560 58M student, KD from E1 causal)
+  E2   submission_20261009_192755_A_d768_lorma_684310_wordsnap 0.5185   0.5174   (same LoRMA model + word snapping)
+  E7   submission_20261009_204225_ens3_roles                   0.5622   0.5535   (ensemble of 3 A models + party roles)
+  E7   submission_20261009_204219_ens3_roles_propnames         0.5891   0.5590   (ensemble of 3 A models + party roles + name propagation)  <- BEST
+
+
+------------------------------------------------------------------------------------------
+4. OBSERVATIONS
+------------------------------------------------------------------------------------------
+1. Macro-F1 weights WIT (187 mentions, 12 docs) as much as DATE (1,575, all 70 docs):
+   rare classes drive the score -> class balancing is worth testing.
+
+2. Party/counsel/judge entities sit in the header (median position 0.15-0.27 of the doc),
+   PREC/AUTH later (~0.55). The first window of each doc holds most APP/RESP/COUNSEL/JUDGE.
+
+3. Same string, different labels (23 surface forms), e.g. "Union of India": RESP 28, APP 14,
+   PREC 4, AUTH 4; "Supreme Court": COURT 114, PREC 3; "Central Government": AUTH 64, PREC 2.
+   The label depends on context -> a gazetteer/string-match approach cannot work alone.
+
+4. CORRECTED 2026-10-09: annotation is fully consistent within a document. The first count (~10% of repeats
+   unannotated) also counted repeats inside larger entities and inside other words. Counting only standalone
+   whole-word repeats in the 56 training docs: every repeat of an annotated string is annotated, with the
+   same label, for all 12 labels (0 exceptions). -> used for name propagation (observation 24).
+
+5. Token alignment with the Phase-1 BPE: only 1 entity start and 152 ends (of 8,393) fall inside
+   a token. Most are punctuation glued by the pre-tokenizer ("SCC 47]." / "1063);" - the entity
+   ends before "." or ";"); a few cut inside a word ("Railway Board|s", "Constitutional Ame|ndment").
+   Fix: split punctuation runs into single characters for NER; remaining ceiling ~0.3%.
+
+7. Strong overfitting: train loss reaches ~0.001 within ~10 epochs while val F1 plateaus at 0.45-0.50
+   (70 docs only). Val F1 jumps +-0.03 between epochs (14 val docs) -> small differences are noise.
+
+8. Keeping the CAUSAL mask works better than removing it for A (0.505 vs 0.473): the representations
+   transfer best in the attention mode they were pretrained with.
+
+9. LoRMA with 1.4% trainable parameters matches bidirectional full fine-tuning (0.480 vs 0.473).
+
+10. APP/RESP are the worst labels (F1 0.05-0.16): the model finds the party names but gives every
+    mention in a doc the same wrong side - the role is only stated in the header ("... Appellant
+    Versus ... Respondent"), which mid-document windows cannot see. -> header-context windows
+    (doc's first 256 tokens prepended to every window), running now.
+
+11. Header context did not help (E1 0.492 vs 0.505, LoRMA 0.487 vs 0.507 without it): within val noise,
+    APP/RESP stayed weak. Dropped.
+
+12. Causal attention is better for every causal-pretrained model: LoRMA 0.507 vs 0.480, D 0.461 vs 0.427.
+    With causal attention LoRMA (1.4% trainable) matches full fine-tuning (0.507 vs 0.505).
+
+13. Codabench vs local validation: E1 (bidirectional full FT, 8fcd22) val 0.4728 -> test 0.4807 (+0.008).
+    The 14-doc validation set tracks the test score closely for this run.
+    E1 causal (5c4900): val 0.5048 -> test 0.4790. On the test set causal and bidirectional full fine-tuning
+    TIE (0.4790 vs 0.4807): the +0.03 causal advantage on validation was noise from the small val set.
+    -> differences below ~0.03 on the 14 val docs should not be trusted.
+
+15. LoRMA beats full fine-tuning on the test set: 0.5090 vs 0.4790/0.4807, training 1.4% of the parameters
+    (1.9M vs 140.2M). With only 56 training docs, freezing the backbone limits overfitting; the
+    parameter-efficient method is not just close to full fine-tuning, it is better. Val 0.5074 -> test 0.5090.
+
+16. Retraining LoRMA on all 70 docs did NOT help: 0.4877 vs 0.5090 with 56 docs. Likely causes: (a) the
+    learning-rate schedule changed - the 56-doc run peaked at epoch 5 of a 25-epoch schedule (LR still high),
+    the 70-doc run decayed the LR to zero within 6 epochs, so it is not the same model with more data;
+    (b) run-to-run variance (seed, which epoch is best) on a 35-doc test set is about +-0.02.
+    The 56-doc LoRMA model (684310) stays the final Phase-2 model.
+
+17. Phase-1 ranking carries over to NER (best Codabench per architecture):
+    A 0.5090 (LoRMA) > D 0.4628 (partial FT) > C 0.4019 (adapters) > B 0.3631 (LoRA)
+    = the Phase-1 ranking A > D > C > B. Better legal LM pretraining -> better NER.
+    (Caveat: each architecture used a different method; A shows the method effect is ~0.03, smaller
+    than the architecture gaps of 0.05-0.15.)
+
+18. KD on the test set: the 58M student scores 0.4684 vs the 140M teacher's 0.4790 -> 98% of the teacher's
+    score with 41% of the parameters. (The student-alone baseline was not uploaded; on validation KD added
+    +0.026.)
+
+19. Validation vs Codabench (7 uploads with a val score): test - val = -0.026 to +0.043, mean +0.003; the ranking of
+    experiments is largely preserved - only pairs closer than 0.03 swap (E1 causal/bidir, E6/E1 bidir).
+    The 14-doc split is a usable but noisy (+-0.03) guide.
+
+20. Word-boundary snapping (found in the error analysis, 2026-10-09): 4.5% of the best model's predictions
+    start or end inside a word ('Th' + 'ukral' for 'Thukral', 'OF 200' for 'OF 2008') against 36 of 1,628
+    gold val entities. Extending predictions to whole words (and merging overlaps) raises val macro-F1 for
+    EVERY model: +0.005 (C) to +0.017 (B); best model 0.5074 -> 0.5185.
+    Costs 0.007 on the gold round trip (0.9944 -> 0.9875; the few gold spans that end inside a word).
+    Now part of decoding (ner_data.snap_to_words).
+    Confirmed on Codabench: the same LoRMA model goes 0.5090 -> 0.5174 (+0.0084) with snapping only.
+
+21. Error analysis of the best model (details: analysis\error_analysis\error_analysis.md):
+    - AUTH causes most false positives (333 of 666): generic words ('Government', 'State', 'Board') and
+      acronyms ('AICTE', 'VESCO') tagged everywhere, while the gold marks them only in some contexts.
+    - Boundary errors: 196 too short (sub-word fragments), 121 too long (modifiers such as 'Delhi High Court'
+      vs gold 'High Court', trailing punctuation), 7 shifted.
+    - Wrong-label errors are rare (89) and are role confusions: RESP->APP 22, R.COUNSEL->A.COUNSEL 13,
+      PREC->COURT 13.
+    - APP/RESP: three failure modes - whole-document side flip (1236969: 16 of 23 RESP labelled APP), mixed
+      sides (154395703), and missed 'M/s. ...' company names (952082).
+    - No clear effect of position in the document (recall 0.59-0.69 in every fifth); weak length effect.
+    - LoRMA wins on recall (macro-R 0.577 vs P 0.462): macro-F1 rewards recall on the rare labels.
+
+22. Ensemble (E7, 2026-10-09): averaging the per-token tag probabilities of the three A d768 runs (E2 LoRMA,
+    E1 bidir, E1 causal; same tokenizer) before decoding. No training. Val (all with word snapping):
+      E2 alone 0.5185 | E2+E1b 0.5534 | E2+E1c 0.5595 | E1b+E1c 0.5467 | all three 0.5594 (micro 0.6337).
+    +0.04 macro / +0.07 micro over the best single model - well above val noise. The models make different
+    mistakes (LoRMA recall-heavy, full FT balanced), so averaging raises precision without losing recall.
+
+23. Party-role rules (postprocess.resolve_party_roles): APP/RESP predictions in the case title are set by their
+    side of 'Versus'/'Vs.'; later APP/RESP predictions matching header names of one side follow it. Designed
+    and checked on the TRAINING docs only (clean gold: 622/623 labels kept; 50% random side flips: 50% -> 75%
+    correct). Val: ensemble 0.5594 -> 0.5622 (+0.003, APP 0.26->0.28, RESP 0.20->0.23). Small, because side
+    flips are not the main APP/RESP problem: the ensemble MISSES 97 of 165 gold APP/RESP mentions entirely.
+
+24. Name propagation (postprocess.propagate_strings, labels APP/RESP/A.COUNSEL/R.COUNSEL/JUDGE/WIT): every
+    standalone repeat of a predicted name gets its majority label (justified by observation 4). Val:
+      ensemble + roles 0.5622 -> + propagation of names 0.5891 (micro 0.6349 -> 0.6392).
+    Propagating ALL labels gave 0.5781 but lowered micro (0.6081): generic strings ('High Court', 'Act') often
+    sit inside a larger entity the model did not predict (COURT fp 49 -> 105). The name-only subset was chosen
+    AFTER seeing val -> only the Codabench score is an unbiased check. Propagation does not help the single
+    LoRMA model (0.5219 -> 0.5206): it spreads that model's false positives, the ensemble is more precise.
+    Codabench: 0.5590 (+0.042 over the best single model, 0.5174). Val overestimated this pipeline by 0.030,
+    the largest val->test drop so far - consistent with the post-processing choices tuned on val.
+
+25. Where the final gain comes from (Codabench, same LoRMA model throughout):
+      LoRMA alone 0.5090 -> + word snapping 0.5174 (+0.008) -> ensemble of 3 + party roles 0.5535 (+0.036)
+      -> + name propagation 0.5590 (+0.006).
+    The ensemble is the big, reliable step (val predicted +0.044, test +0.036). Name propagation added
+    +0.027 on val but only +0.006 on test: most of its val gain was fitting the val docs (the label subset was
+    chosen after seeing val). Ensemble-only val 0.5622 -> test 0.5535 (-0.009) vs propagation -0.030.
+
+14. Knowledge distillation works: the 58M student gains +0.026 macro-F1 (0.451 -> 0.477) from the teacher's
+    soft labels and recovers ~half of the gap to the 140M teacher (0.505) with 2.4x fewer parameters and
+    27% less training memory. It needed more epochs (11 vs 5) - the soft targets act as a regulariser
+    against the fast overfitting seen in every run. Inference time on the 14 val docs is the same
+    (~3 s): it is dominated by CPU-side decoding (Viterbi in numpy), not by the model.
+
+6. PREC spans are long (median 31 chars, up to 52 tokens) -> BIO tagging rather than span
+   enumeration with a small max width.
+
+
+------------------------------------------------------------------------------------------
+5. NOTEBOOK / PIPELINE
+------------------------------------------------------------------------------------------
+- Folder layout (2026-10-07):
+    Phase2\src\            shared modules (models, data/alignment, PEFT, heads, training, decode/eval)
+    Phase2\notebooks\      one notebook per experiment
+    Phase2\data\           val_split.json
+    Phase2\submissions\<EXP>\submission_<stamp>_<RUN_ID>\
+    Phase2\analysis\       tables, figures\, error_analysis\
+    C:\kaggle\working\cs781\phase2\{cache, runs\<EXP>\<RUN_ID>\, logs}   (large files, outside OneDrive)
+- Phase-2 training data downloaded to C:\kaggle\working\cs781\hf_data\Phase_2_LNER (2026-10-07).
+- AI-assisted (for the LLM Declaration): data analysis, val split, experiment plan, all src\ code,
+  experiment runs and the analysis in this file (Claude).
+
+
+------------------------------------------------------------------------------------------
+6. NEXT STEPS
+------------------------------------------------------------------------------------------
+- DONE 2026-10-09: src\ (Phase-1 model classes copied from the notebooks, offset-aware BPE with
+  punctuation splitting, BIO + sliding windows, BIO-constrained Viterbi decoding, LoRA/LoRMA/LoRMA-pi/
+  adapters/BitFit/partial, KD with cross-tokenizer alignment, strict scorer, submission writer).
+  CRF head not built (constrained Viterbi used instead).
+- DONE: causal + header context for E1/E2, causal D (E5) - see Results.
+- DONE: E6 knowledge distillation (see Results).
+- DONE 2026-10-09: 9 Codabench submissions (all four architectures, full FT / LoRMA / LoRA / adapters /
+  partial FT / KD). Best single model: E2 LoRMA + word snapping 0.5174 (0.5090 without snapping).
+  Best overall: E7 ensemble + party roles + name propagation 0.5590.
+- DONE 2026-10-09: report material - Phase2\analysis\figures\fig1-fig4 (test vs val, per-label F1 heatmap,
+  error types, score vs trainable parameters), analysis\error_analysis\error_analysis.md,
+  analysis\results.md/.csv. Scripts: src\analyze.py, src\collect_results.py.
+- DONE: word-snapped LoRMA uploaded -> Codabench 0.5174.
+- E7 ens3_roles_propnames uploaded -> Codabench 0.5590 (best Phase-2 result).
+- DONE: E7 ens3_roles uploaded -> 0.5535 (ensemble + roles without propagation), see observation 25.
+esults.md), per-label analysis, error analysis.

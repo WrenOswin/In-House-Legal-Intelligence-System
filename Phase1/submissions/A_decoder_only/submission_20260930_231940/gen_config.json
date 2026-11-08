@@ -1,0 +1,12 @@
+{
+ "gen": {
+  "temperature": 0.8,
+  "top_k": 50,
+  "top_p": 0.95,
+  "repetition_penalty": 1.1,
+  "max_new_tokens": 320
+ },
+ "ckpt": "ckpt_best.pt",
+ "tokenizer": "bpe_v32000_f346ed5f65.json",
+ "data": "data_8a18637631"
+}

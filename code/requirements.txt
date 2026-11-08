@@ -1,0 +1,10 @@
+# Python 3.12; install PyTorch with the CUDA build for your GPU first (https://pytorch.org)
+torch>=2.14
+numpy>=2.5
+regex                # Unicode-aware BPE pre-tokenizer
+scipy                # sparse BM25 (Phase 7)
+psutil               # process priority / throttling during training
+huggingface_hub      # dataset download (gated dataset: huggingface-cli login)
+matplotlib           # analysis figures
+scikit-learn         # Phase 5 metric check + TF-IDF reference, Phase 6 salience regression
+rouge-score          # Phase 6 local ROUGE

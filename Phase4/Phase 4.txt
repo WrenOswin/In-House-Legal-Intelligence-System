@@ -1,0 +1,288 @@
+Phase 4
+
+Court Judgment Prediction (CJPE) - 17 to 21 Oct 2026 (deadline 21 Oct 23:59)
+
+
+==========================================================================================
+PHASE 4 SUMMARY - binary outcome (0/1) per case document, macro-F1
+==========================================================================================
+Task: predict the judgment outcome of each test case from its text (long documents).
+Rules: start from the Phase-1 models (ALL FOUR architectures); >= 4 substantially different experiments:
+>= 3 different fine-tuning/PEFT techniques from the section 10.2.1 list (LoRMA compulsory) + >= 1 knowledge
+distillation (larger teacher -> smaller student). Minimum 4 valid submissions (README: 6).
+STATUS 2026-10-21: COMPLETE - 11 submissions, all requirements met. Best: K5 ensemble (J5 + K3) Codabench 0.7771;
+best single model J5 (KD, A d560) 0.7706.
+
+  Submission              Arch / technique                       Trainable (backbone+head)  Val      Codabench
+  K5 ensemble J5+K3       mean P(1) of J5 and K3                  -                          0.7958   0.7771  <- BEST
+  J5_KD                   A d560 student, KD from J1              58.07M + 0.156M            0.7735   0.7706  <- best single
+  K1_A_full_noKD          A d560, full FT, no teacher (KD base)   58.07M + 0.156M            0.7625   0.7618
+  K3_C_full_KD            C d560, full FT + KD from J1            58.07M + 0.156M            0.7847   0.7586
+  J1_A_lorma              A d768, LoRMA+ r=8 (compulsory)         1.917M + 0.213M            0.7417   0.7431
+  E_ensemble J1+J4        mean P(1) of J1 and J4                  -                          0.7486   0.7426
+  J4_D_partial            D d560, partial FT (top 4/8 blocks)     18.194M + 0.156M           0.7352   0.7052
+  K2_D_lorma              D d560, LoRMA r=8                       0.824M + 0.156M            0.6357   0.6288
+  J3_C_adapter            C d560, Pfeiffer adapters               0.578M + 0.156M            0.6354   0.5906
+  K4_B_lorma_KD           B d512 encoder, LoRMA + KD from J1      0.639M + 0.142M            0.6146   0.5767
+  J2_B_bitfit             B d512 encoder, BitFit                  0.040M + 0.142M            0.5573   0.5273
+  (J1-J5 + J1+J4 uploaded 2026-10-17; K1-K5 uploaded 2026-10-21 after the TAs' dev.json fix)
+  Requirements: all 4 architectures (A, B, C, D); 4 PEFT/FT techniques from the list (LoRMA, BitFit, adapters,
+  partial FT); KD experiments (J5, K3, K4); 11 valid submissions (minimum 4, README 6).
+
+History: on 2026-10-16 a first pipeline was built and run (J1 val 0.7626, frozen-feature section probes); the
+user cleared that Phase4 folder, and on 2026-10-17 it was rebuilt as a LIGHTWEIGHT pipeline so the laptop
+stays usable while training (section 5). The 2026-10-16 caches in C:\kaggle\working\cs781\phase4 were reused.
+
+
+------------------------------------------------------------------------------------------
+1. EXPERIMENTS (src\run_queue.py)
+------------------------------------------------------------------------------------------
+  J1  A d768 (140M)     LoRMA+ r=8 (compulsory), lr 1e-4              -> KD teacher
+  J2  B encoder (42M)   BitFit (zero-init biases added; backbones have none), lr 1e-3
+  J3  C prefix-LM (58M) adapters (Pfeiffer, bottleneck 64), lr 2e-4
+  J4  D efficient (54M) partial / layer-wise FT (top 4 of 8 blocks + final norm), lr 5e-5
+  J5  A d560 (58M)      knowledge distillation from J1 (full FT student, grad ckpt), lr 3e-5
+  E   ensembles of the runs' P(1) (src\ensemble.py, CPU only), val-tuned threshold
+  Round 2 (2026-10-20, 5 more submissions requested):
+  K1  A d560 (58M)      full FT WITHOUT a teacher (KD baseline for J5), lr 3e-5
+  K2  D efficient       LoRMA r=8, lr 1e-4 (method control vs J4 partial FT on the same backbone)
+  K3  C prefix-LM       full FT + KD from J1 (distillation into a different architecture), lr 3e-5
+  K4  B encoder         LoRMA r=8 + KD from J1, lr 2e-4 (stronger method than J2's BitFit)
+  K5  ensemble of the best round-1/2 runs (CPU)
+  Shared model: 512-token chunks (<= 4 random per doc in training, <= 8 evenly spaced at inference) ->
+  backbone -> mean pooling -> LayerNorm + chunk-position feature -> attention pooling -> 2 logits;
+  class-balanced CE; 2 epochs, 32 docs/step, head lr 1e-3; checkpoint + threshold selected on val.
+
+
+------------------------------------------------------------------------------------------
+2. DATA (measured 2026-10-16)
+------------------------------------------------------------------------------------------
+- C:\kaggle\working\cs781\hf_data\Phase_4_CJPE (ILDC; records {id, text, label, expert_1..5}, experts empty).
+- train.json 37,387 rows = 31,652 unique docs (41% label 1, mostly 1990-2020, cased, one line per doc).
+- dev.json 3,505 rows = 2,511 unique docs = 994 dev docs (each twice) + all 1,517 test docs.
+- val = the 994 dev docs that are NOT test docs (497/497, 1950-90, lower-cased with hard line wraps).
+- test 1,517 docs (1950-90 + 22 docs from 2000+).
+- Length: median ~3.5k BPE tokens per val/test doc (train 2.5k); only 4% of val/test fit in 1,024 tokens,
+  21% in 2,048, 60% in 4,096.
+- DATA LEAK: test.json carries a label field and dev.json contains all 1,517 test docs with the same labels
+  (1,517/1,517 identical). Never used (labels dropped on load; validation on the 994 clean dev docs). Tell the TAs.
+- DATASET UPDATE (TAs, re-downloaded 2026-10-20 to C:\kaggle\working\cs781\hf_data_new): train.json and
+  test.json byte-identical to the old files; dev.json now 1,988 rows = 994 unique docs (497/497), no overlap with
+  test, and exactly the 994 clean docs we already used as val -> caches, val and all J1-J5 results stay valid.
+  test.json still carries a label field (755 x 0 / 762 x 1) - still never used.
+- Every split lower-cased + whitespace collapsed (train/test style mismatch).
+- Final decision sentences were removed (ILDC): "appeal allowed/dismissed" wording in the last 1,500 characters
+  of only 8% of train and 4% of val/test docs.
+- Reference on val, no Phase-1 model (TF-IDF 1-2 grams + LR, 2026-10-16, never submitted):
+    majority class 0.333 | first 512 words 0.593 | last 512 words 0.640 | whole document 0.690
+
+
+------------------------------------------------------------------------------------------
+3. RESULTS
+------------------------------------------------------------------------------------------
+  2026-10-16 (first pipeline, files cleared; numbers kept for the report):
+    J1 A d768 LoRMA lr 1e-4, <= 4 chunks train / <= 16 eval: val 0.7626 @thr 0.47 (84 min, 21.1k tok/s, 4.74 GB)
+    J1 first attempt at lr 5e-4 (16 docs/step): train loss flat ~0.74, predicted class 1 for every val doc
+      (0.333 @0.5) at step 990 -> stopped; lr 1e-4 + 32 docs/step used since.
+    Frozen-backbone section probe (head trained on cached frozen chunk features, 512-token chunks, <= 16 per doc;
+    val macro-F1 @tuned threshold):
+      chunks used                 A d768   B enc    C        D
+      first chunk                 0.582    0.549    0.562    0.561
+      last chunk                  0.607    0.561    0.615    0.587
+      first + last                0.602    0.571    0.589    0.580
+      middle (mean)               0.602    0.580    0.581    0.574
+      all (mean / max / attn)     0.597/0.605/0.593  0.591/0.580/0.590  0.590/0.589/0.574  0.577/0.575/0.592
+
+  2026-10-17 (lightweight pipeline; val macro-F1 at the tuned threshold unless noted):
+  J1 A d768 LoRMA+ r=8, lr 1e-4, 2 epochs (run A_d768_lorma_09e521, 10:23):
+    val eval   step   train loss   F1 @0.5   pred pos   F1 @thr
+    ep1 half    495   0.7044       0.5811    0.56       0.5885 @0.52
+    ep1 end     990   0.6841       0.6876    0.64       0.7132 @0.65
+    ep2 half   1485   0.6138       0.6941    0.34       0.7290 @0.39
+    ep2 end    1980   0.5996       0.7411    0.46       0.7417 @0.51   <- selected
+    final: macro-F1 0.7417, P 0.7454, R 0.7425, acc 0.7425 | trainable 1.917M + head 0.213M of 142.28M
+    train 138.2 min at 12.8k tok/s (throttled; 84 min unthrottled on 2026-10-16), peak VRAM 3.19 GB,
+    inference val 74 s / test 112 s. 0.02 below 2026-10-16 (0.763; eval used 16 chunks/doc then, 8 now).
+    Submission: Phase4\submissions\J1_A_lorma\submission_20261017_124501_A_d768_lorma_09e521\submission.zip
+    Codabench: 0.7431  (test - val = +0.001)
+  J2 B d512 encoder BitFit, lr 1e-3, 2 epochs (run B_d512_bitfit_555843, 12:45):
+    val by eval: 0.5483 (495) -> 0.5563 (990) -> 0.5541 (1485) -> 0.5573 (1980, selected, thr 0.49)
+    train loss 0.697 -> 0.687 (chance = 0.693): BitFit on the 42M encoder barely learns the task.
+    final: macro-F1 0.5573, acc 0.5573 | test pred pos 0.503 | trainable 0.040M + head 0.142M of 41.74M
+    train 42.0 min at 42.2k tok/s, peak VRAM 0.74 GB
+    Submission: Phase4\submissions\J2_B_bitfit\submission_20261017_132848_B_d512_bitfit_555843\submission.zip
+    Codabench: 0.5273  (test - val = -0.030)
+  J3 C d560 prefix-LM, Pfeiffer adapters (bottleneck 64), lr 2e-4, 2 epochs (run C_d560_adapter_df05cf, 13:28):
+    val by eval: 0.5544 (495) -> 0.5815 (990) -> 0.6284 (1485) -> 0.6354 (1980, selected, thr 0.44)
+    train loss 0.706 -> 0.664; still improving at the end (lr 2e-4 likely too low / too few epochs).
+    final: macro-F1 0.6354, P 0.6443, R 0.6388, acc 0.6388 | test pred pos 0.604 | trainable 0.578M + head 0.156M of 58.81M
+    train 77.4 min at 22.9k tok/s, peak VRAM 1.32 GB
+    Submission: Phase4\submissions\J3_C_adapter\submission_20261017_144820_C_d560_adapter_df05cf\submission.zip
+    Codabench: 0.5906  (test - val = -0.045)
+  J4 D d560 efficient, partial FT (top 4 of 8 blocks + final norm), lr 5e-5, 2 epochs (run D_d560_partial_029156, 14:48):
+    val by eval: 0.5865 (495) -> 0.7038 (990) -> 0.7223 (1485) -> 0.7352 (1980, selected, thr 0.46)
+    final: macro-F1 0.7352, P 0.7360, R 0.7354, acc 0.7354 | test pred pos 0.551 | trainable 18.194M + head 0.156M of 54.46M
+    train 67.2 min at 26.4k tok/s, peak VRAM 1.26 GB
+    Submission: Phase4\submissions\J4_D_partial\submission_20261017_155747_D_d560_partial_029156\submission.zip
+    Codabench: 0.7052  (test - val = -0.030)
+  J5 KD: student A d560 (58.2M, full FT, grad ckpt, lr 3e-5) <- teacher J1 (A d768 LoRMA, 142.3M, val 0.7417),
+  loss 0.5 * CE + 0.5 * T^2 * KL(teacher || student), T = 2, document-level logits (run A_d560_full_kd_a06074, 15:58):
+    teacher logits on all 31,652 train docs: 1,843 s (cached in the J1 run dir as train_logits.npy)
+    val by eval: 0.7072 (495) -> 0.7410 (990) -> 0.7644 (1485) -> 0.7735 (1980, selected, thr 0.50)
+    final: macro-F1 0.7735, P 0.7745, R 0.7736, acc 0.7736 | test pred pos 0.485
+    train 117.7 min at 15.1k tok/s, peak VRAM 1.36 GB (J1 teacher: 3.19 GB), val inference 44.5 s (J1: 73.6 s)
+    Submission: Phase4\submissions\J5_KD\submission_20261017_182836_A_d560_full_kd_a06074\submission.zip
+    Codabench: 0.7706  (test - val = -0.003)  <- BEST Phase-4 submission
+  Ensembles (src\ensemble.py: mean of the runs' P(1), threshold tuned on val; CPU only), val macro-F1:
+    J1+J4 0.7486 | J1+J3+J4 0.7470 | J1+J2+J4 0.7435 | J1+J2 0.7342 | J1+J2+J3+J4 0.7313 | J1+J3 0.7171 | J3+J4 0.7162
+    with J5: J5 alone 0.7735 | J1+J5 0.7731 | J2+J5 0.7680 | J4+J5 0.7676 | J1+J4+J5 0.7654 - none beats J5.
+    Submission J1+J4 (chosen on val, so its +0.007 over J1 is slightly optimistic):
+      Phase4\submissions\E_ensemble\submission_20261017_155841_J1+J4\submission.zip
+      Codabench: 0.7426  (test - val = -0.006; J1 alone 0.7431)
+  ROUND 2 (2026-10-20, after the TAs' dev.json fix):
+  K1 A d560 full FT, NO teacher (KD baseline for J5), lr 3e-5, 2 epochs (run A_d560_full_c2d7b3, 19:49):
+    val by eval: 0.6183 (495) -> 0.7240 (990) -> 0.7327 (1485) -> 0.7625 (1980)  (J5 with teacher: 0.7072 -> 0.7410 -> 0.7644 -> 0.7735)
+    final: macro-F1 0.7625, P 0.7627, R 0.7626 @thr 0.47 | test pred pos 0.5267
+    train 113.2 min at 15.7k tok/s, peak VRAM 1.35 GB
+    -> KD adds +0.011 at the end (0.7735 vs 0.7625, within the ~0.015 noise) but +0.09 early (step 495):
+       distillation mainly speeds learning up; most of the student-beats-teacher gap comes from full FT of A d560.
+    Submission: Phase4\submissions\K1_A_full_noKD\submission_20261020_214500_A_d560_full_c2d7b3\submission.zip
+    Codabench (reported by the user 2026-10-21): 0.7618  (val 0.7625 -> test - val = -0.001)
+  K2 D d560 LoRMA r=8, lr 1e-4, 2 epochs (run D_d560_lorma_286232, 21:45):
+    val by eval: 0.5562 (495) -> 0.6076 (990) -> 0.6198 (1485) -> 0.6357 (1980)  (J4 partial FT on D: 0.5865 -> 0.7038 -> 0.7223 -> 0.7352)
+    final: macro-F1 0.6357 @thr 0.48 | test pred pos 0.4806 | trainable 0.824M + head 0.156M of 55.29M
+    train 103.1 min at 17.2k tok/s, peak VRAM 1.91 GB
+    -> on the same D backbone, partial FT (top 4 blocks) beats LoRMA by +0.10 on val.
+    Submission: Phase4\submissions\K2_D_lorma\submission_20261020_233103_D_d560_lorma_286232\submission.zip
+    Codabench (reported by the user 2026-10-21): 0.6288  (val 0.6357 -> test - val = -0.007)
+  K3 C d560 prefix-LM, full FT + KD from J1 (alpha 0.5, T 2), lr 3e-5, 2 epochs (run C_d560_full_kd_772baf, 23:31):
+    val by eval: 0.7444 (495) -> 0.7640 (990) -> 0.7745 (1485) -> 0.7847 (1980)  (J3 adapters on C: final 0.6354)
+    final: macro-F1 0.7847 @thr 0.46 | test pred pos 0.5234 | trainable 58.071M + head 0.156M of 58.23M
+    train 110.5 min at 16.1k tok/s, peak VRAM 1.35 GB
+    -> BEST val of Phase 4; C goes from 0.635 (adapters) to 0.785 with full FT + KD.
+    Submission: Phase4\submissions\K3_C_full_KD\submission_20261021_012327_C_d560_full_kd_772baf\submission.zip
+    Codabench (reported by the user 2026-10-21): 0.7586  (val 0.7847 -> test - val = -0.026)
+  K4 B d512 encoder, LoRMA r=8 + KD from J1, lr 2e-4, 2 epochs (run B_d512_lorma_kd_42b205, 01:23):
+    val by eval: 0.5771 (495) -> 0.5986 (990) -> 0.6146 (1485) -> 0.6060 (1980)  (selected: step 1485)
+    final: macro-F1 0.6146 @thr 0.46 | test pred pos 0.5115 | trainable 0.639M + head 0.142M of 42.34M
+    train 58.8 min at 30.2k tok/s, peak VRAM 1.08 GB
+    -> better than BitFit on B (J2 0.5573) but B stays the weakest backbone, even with a teacher.
+    Submission: Phase4\submissions\K4_B_lorma_KD\submission_20261021_022333_B_d512_lorma_kd_42b205\submission.zip
+    Codabench (reported by the user 2026-10-21): 0.5767  (val 0.6146 -> test - val = -0.038)
+  K5 ensemble J5 + K3 (mean P(1), thr 0.47): val macro-F1 0.7958 (K3 alone 0.7847, J5 0.7735)
+    Best of all subsets on val (J2+J5+K1+K3 0.7887, J5+K1+K3 0.7876, J1+J5+K3 0.7847) - chosen on val, so
+    slightly optimistic, but it is also the natural pick: the two strongest models, two different architectures.
+    Submission: Phase4\submissions\E_ensemble\submission_20261021_022358_J5+K3\submission.zip
+    Codabench (reported by the user 2026-10-21): 0.7771  (val 0.7958 -> test - val = -0.019)  <- NEW BEST Phase-4 submission
+  Round 2: 5 submissions uploaded 2026-10-21 (K1 0.7618, K2 0.6288, K3 0.7586, K4 0.5767, K5 0.7771).
+  All submissions validated before upload: 1,517 ids in test.json order, int 0/1, prediction.json at the zip root.
+  TOTAL: 11 Codabench submissions (6 on 2026-10-17, 5 on 2026-10-21). Best: K5 ensemble J5 + K3 0.7771.
+
+
+------------------------------------------------------------------------------------------
+4. OBSERVATIONS
+------------------------------------------------------------------------------------------
+1. Test labels are recoverable from the released files (test.json label field; dev.json contains the test
+   set) - not used. Validation is on the 994 clean dev docs.
+
+2. Outcome evidence is spread over the whole judgment: TF-IDF whole doc 0.690 > last 512 words 0.640 > first
+   512 words 0.593 -> chunked (hierarchical) document model over many chunks, not just the ending.
+
+3. Sections (frozen-feature probe, all four architectures): the last chunk is the most informative single
+   section (A/C/D: last beats first by +0.025 to +0.053; TF-IDF the same, +0.047), the opening chunk (case
+   history, parties) the least. With frozen features, pooling more chunks does not help (except the weak B
+   encoder, 0.561 -> 0.591), and mean / max / attention pooling differ by <= 0.02 (noise).
+
+4. Fine-tuning is essential: frozen Phase-1 features reach only 0.55-0.62 (below TF-IDF 0.69), fine-tuned
+   models 0.71-0.77. The Phase-1 LMs (next-token pretraining on cased modern text) transfer to CJPE only after
+   adaptation of the backbone itself.
+
+5. Prior shift: train 41% positive, val/test 50% -> class-balanced CE + a val-tuned threshold. The predicted
+   positive rate swings between evals (e.g. J1 0.56 -> 0.64 -> 0.34 -> 0.46); the threshold (0.39-0.65)
+   corrects it. At the selected checkpoints the gain over 0.5 is 0.000-0.010 (J1 +0.001, J4 +0.009, J5 0).
+
+6. Learning rate matters for LoRMA here: lr 5e-4 drifted into a constant predictor within one epoch; lr 1e-4
+   with 32 docs/step learned steadily.
+
+7. Techniques (Codabench): KD student 0.771 > LoRMA (A d768) 0.743 > partial FT (D) 0.705 > adapters (C) 0.591
+   > BitFit (B) 0.527. Methods that change more of the network or the representation inside each block (LoRMA's
+   multiplicative update on every projection, partial FT of 4 whole blocks, full FT in the student) work;
+   methods with very few or very local parameters (BitFit 0.04M biases, bottleneck adapters at lr 2e-4) stay
+   close to the frozen-feature level. Architecture and method are confounded (one method per architecture).
+
+8. Parameter-efficient vs full: LoRMA trains 1.4% of A d768's weights and reaches 0.743; the fully fine-tuned
+   58M KD student reaches 0.771. Partial FT of D (33% of its weights) 0.705.
+
+9. Knowledge distillation: the 58M student (full FT on teacher logits + labels) beats its 140M LoRMA teacher on
+   val (0.7735 vs 0.7417) AND test (0.7706 vs 0.7431), with 43% of the training memory (1.36 vs 3.19 GB) and
+   60% of the inference time. It also learns much faster (val 0.707 at step 495 vs the teacher's 0.589). Part of
+   the gain may come from full fine-tuning the student (vs LoRMA in the teacher); the same student without the
+   teacher was not trained, so the two effects are not separated.
+
+10. Val predicts test well in Phase 4 (994 val docs vs 10 in Phase 3): J1 +0.001, J5 -0.003, ensemble -0.006,
+    J2 -0.030, J4 -0.030, J3 -0.045. Val ranks all six submissions in the same order as Codabench; the weaker,
+    still-learning models lose more on test (less stable thresholds).
+
+11. Ensembling gives no test gain: J1+J4 0.7426 vs J1 alone 0.7431 (the +0.007 on val was within noise and
+    partly selection); no ensemble with J5 beats J5 on val. Unlike Phases 2-3, one strong model is enough here.
+
+12. BitFit on the B encoder (0.040M trainable bias parameters) barely learns CJPE: train loss stays at chance
+    (0.687-0.697), val 0.557, test 0.527 - below even the frozen-B probe (0.56-0.59).
+
+14. KD vs no KD (K1 = J5's student without a teacher): val 0.7625 vs 0.7735 (+0.011, within noise) at the end,
+    but +0.09 at step 495 (0.618 vs 0.707). Distillation mainly speeds learning; most of the student-beats-teacher
+    gap comes from full fine-tuning of the smaller A d560.
+15. Method control on D: partial FT (top 4 blocks, 18.2M params) 0.7352 vs LoRMA (0.82M) 0.6357 - on D, LoRMA
+    at lr 1e-4 is clearly weaker; on A d768 (J1) the same LoRMA recipe reached 0.742.
+16. Full FT + KD rescues weak techniques: C 0.635 (adapters) -> 0.785 (full FT + KD, best single model);
+    B 0.557 (BitFit) -> 0.615 (LoRMA + KD). With the same recipe, C (prefix-LM) > A d560 > B, so the prefix-LM
+    architecture is a strong student for CJPE.
+17. Ensembling two strong models of different architectures helps on test too: J5 + K3 0.7771 vs J5 0.7706 and
+    K3 0.7586 (+0.007 over the best member), unlike J1 + J4 in round 1 (no gain).
+18. K3 (C full FT + KD) had the best val (0.785) but lost 0.026 on test (0.759 < J5 0.771): with 994 val docs a
+    0.01 val gap between strong models is not reliable. Round-2 test - val: K1 -0.001, K2 -0.007, K5 -0.019,
+    K3 -0.026, K4 -0.038. KD baseline confirmed on test: K1 0.7618 vs J5 0.7706 (+0.009 from KD).
+13. Cost (2026-10-17, throttled to ~60% GPU): B 42 min / 0.74 GB, D 67 min / 1.26 GB, C 77 min / 1.32 GB,
+    A d560 KD 118 min / 1.36 GB (+31 min teacher logits), A d768 LoRMA 138 min / 3.19 GB. Total ~7.5 h of
+    training for the six submissions.
+
+
+------------------------------------------------------------------------------------------
+5. NOTEBOOK / PIPELINE
+------------------------------------------------------------------------------------------
+- Folder layout (as Phases 2-3): Phase4\{src, submissions\<EXP>\submission_<stamp>_<RUN_ID>, analysis};
+  large files in C:\kaggle\working\cs781\phase4\{cache, features, runs\<EXP>\<RUN_ID>, logs}.
+- Phase4\src (2026-10-17, lightweight rewrite):
+    copied from Phase3\src: bpe.py, models_a-d.py, backbone.py, peft.py (+ bitfit: zero-init bias vectors added
+                  to every block linear layer, only they are trained)
+    cjpe.py       meta.json (ids/labels/years only), memory-mapped token files (*.flat.npy / *.off.npy built
+                  from the 2026-10-16 caches), chunking, macro-F1, threshold, prediction.json writer
+    model.py      DocModel: chunk encoder + attention-pooling head with chunk positions
+    train.py      driver with laptop-comfort settings (not part of the run id):
+                    duty 0.6       GPU busy at most ~60% of the time (sleep after every micro-batch)
+                    BELOW_NORMAL process priority, 2 CPU threads
+                    vram_fraction 0.6, token_budget 2048 (short GPU bursts), eval <= 8 chunks/doc
+                  KD: teacher logits for all train docs computed once and cached in the teacher's run dir
+    run_queue.py  J1-J5, one at a time, finished runs skipped (safe to stop / restart); the KD teacher is
+                  pinned to J1's run id (a first J5 attempt picked the 2026-10-16 J1 folder by name and failed
+                  to load it - fixed 2026-10-17)
+    ensemble.py   mean P(1) of finished runs, threshold on val, submission; --all-subsets prints val scores
+    run.py        CLI for single configs
+- Smoke tests 2026-10-17 (64 train / 32 val docs): all four archs run; peak VRAM A LoRMA 2.33 GB
+  (4.7 GB on 2026-10-16), B BitFit 0.56, C adapters 0.99, D partial 1.00.
+- Everything from scratch (TA rule since Phase 3): only torch, numpy, psutil, regex and the standard library.
+- AI-assisted (for the LLM Declaration): data analysis, leak check, plan, all Phase4\src code and the
+  analysis in this log (Claude).
+
+
+------------------------------------------------------------------------------------------
+6. NEXT STEPS
+------------------------------------------------------------------------------------------
+- DONE 2026-10-17: J1-J5 + J1+J4 ensemble trained and uploaded (6 submissions). Phase 4 requirements met.
+- DONE 2026-10-21: K1-K5 uploaded (best K5 0.7771). 11 submissions total. Phase 4 complete.
+- test.json still carries a label field after the TAs' fix (dev.json is clean now) - tell the TAs.
+- Tell the TAs about the test-label leak (test.json labels; test docs inside dev.json).
+- Optional for the report (no training needed): error analysis of J5 on val (false positives vs false
+  negatives by document length / era) from the saved logits; figures.
+- Optional: KD baseline (A d560 full FT without the teacher, ~2 h throttled) to separate the KD effect from
+  full fine-tuning (observation 9).

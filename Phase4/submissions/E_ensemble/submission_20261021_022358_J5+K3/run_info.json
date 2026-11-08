@@ -1,0 +1,14 @@
+{
+ "members": [
+  "C:\\kaggle\\working\\cs781\\phase4\\runs\\J5_KD\\A_d560_full_kd_a06074",
+  "C:\\kaggle\\working\\cs781\\phase4\\runs\\K3_C_full_KD\\C_d560_full_kd_772baf"
+ ],
+ "threshold": 0.4700000000000001,
+ "val": {
+  "macro_f1": 0.7958,
+  "macro_p": 0.7958,
+  "macro_r": 0.7958,
+  "acc": 0.7958,
+  "pred_pos": 0.507
+ }
+}

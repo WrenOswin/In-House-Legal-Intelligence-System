@@ -1,0 +1,15 @@
+{
+ "members": [
+  "C:/kaggle/working/cs781/phase2/runs/E2_A_lorma/A_d768_lorma_684310",
+  "C:/kaggle/working/cs781/phase2/runs/E1_A_full/A_d768_full_8fcd22",
+  "C:/kaggle/working/cs781/phase2/runs/E1_A_full/A_d768_full_5c4900"
+ ],
+ "averaging": "mean of per-token tag probabilities",
+ "decoding": "BIO Viterbi + word snapping",
+ "party_roles": true,
+ "propagate_names": true,
+ "val_scores": {
+  "val_macro_f1": 0.5891,
+  "val_micro_f1": 0.6392
+ }
+}

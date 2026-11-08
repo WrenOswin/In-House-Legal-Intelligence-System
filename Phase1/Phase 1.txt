@@ -1,0 +1,272 @@
+Phase 1
+
+Decoder only - LLaMa style
+
+Architectural changes - Added GQA, and KV Cache
+
+
+==========================================================================================
+PHASE 1 SUMMARY - Legal LM pretraining (512-word prompt -> 128-word continuation)
+==========================================================================================
+Metric: BERTScore on Codabench (prediction.json, exactly 128 words per prompt).
+Rules: own architecture, 50M-300M parameters, trained from scratch, free-GPU-scale compute.
+Hardware: local Windows laptop, RTX 5070 Ti Laptop GPU (12 GB), Jupyter in VS Code (.venv).
+
+
+------------------------------------------------------------------------------------------
+1. THE FOUR ARCHITECTURES (Section 5 "Model" of each notebook)
+------------------------------------------------------------------------------------------
+All four share the same LLaMA-style building blocks, so differences come from the design:
+pre-norm RMSNorm, rotary position embeddings (RoPE), SwiGLU feed-forward, no biases,
+tied input/output embeddings, GPT-2-style scaled init, PyTorch fused attention (SDPA).
+
+A. Decoder-only (DecoderOnlyLM)      - one stack, causal mask: each token sees only earlier tokens.
+B. Encoder-decoder (EncoderDecoderLM) - bidirectional encoder reads the prompt (768 tokens);
+                                        causal decoder writes the continuation (256 tokens) with
+                                        cross-attention to the encoder in every layer.
+C. Prefix-LM (PrefixLM)              - one stack; prompt (prefix) attends bidirectionally,
+                                        continuation is causal; learned prefix/suffix segment embedding.
+D. Efficient (EfficientLM)           - causal; sliding-window attention (window 256) in most layers,
+                                        full attention every 4th layer, grouped-query attention (2 KV heads),
+                                        block size 2048.
+
+
+------------------------------------------------------------------------------------------
+2. RESULTS
+------------------------------------------------------------------------------------------
+Architecture comparison (same budget: 200M training tokens, 32k vocab, mix 35/35/15/15):
+
+  Arch  Params   Config                         Steps  Time     Best val loss (ppl)
+  A     58.1M    d560, 8 layers, 8 heads        3052   133 min  2.571 (13.1)   <- best
+  B     73.0M    d512, 6 enc + 6 dec layers     3052    49 min  3.066 (21.4)
+  C     58.1M    d560, 8 layers, segment emb    3052   153 min  2.775 (16.0)
+  D     54.3M    d560, 8 layers, window 256     1526   129 min  2.830 (16.9)
+
+  Note: B and C compute loss only on continuation tokens (which have MORE context and are
+  easier to predict than A's average position) - they are still worse, so A really learned more.
+  Codabench also ranked the decoder-only model best. (Phases 2-6 still require all four
+  architectures - see the course document update below.)
+
+Decoder-only scaling runs:
+
+  Run                          Params   Tokens  Vocab  Mix (acts/SC/HC/trib)  Time     Best val (ppl)
+  d560_L8_T1024_v32k_6613f2    58.1M    200M    32k    35/35/15/15            133 min  2.571 (13.1)
+  d640_L8_T1024_v35k_42d59e    74.8M    450M*   35k    40/40/10/10            210 min  2.143 (8.5)
+  d768_L12_T1024_v35k_5fbdf6   140.2M   600M    35k    35/35/15/15            434 min  1.928 (6.9)
+  GQA + KV cache + deep-thin (notebook Phase1_A_DecoderOnly_GQA_KVCache, run folder A_decoder_only_gqa):
+  d576_L23_T1024_v35k_fbb29e   132.1M   600M    35k    35/35/15/15            515 min  1.936 (6.9)
+  (* 500M requested; the acts file ran out, see observation 4)
+
+  Final model for Phases 2-7:
+  C:\kaggle\working\cs781\runs\A_decoder_only\d768_L12_T1024_v35k_5fbdf6\model_final.pt
+  (+ tokenizer bpe_v35000_666b72a523.json)
+
+Codabench BERTScore (upload time matched to the zip's creation time on disk; Codabench shows local time):
+
+  ID      Uploaded          Submission                                              Score
+  953831  2026-09-30 23:22  A decoder-only d560, 200M (zip 23:19)  [confirmed]        0.8281
+  954588  2026-10-01 12:04  B encoder-decoder (zip 11:51; only new zip at that time)  0.8227
+  955508  2026-10-01 23:43  C prefix-LM (zip 17:49)  [confirmed by elimination]        0.8261
+  955548  2026-10-02 00:38  D efficient (zip 23:20)  [confirmed]                      0.8270
+
+  ------  after 10-03 18:56  A decoder-only d768, 600M (zip 2026-10-03 18:55)           0.8321  <- BEST
+          submission_20261003_185559_d768_L12_T1024_v35k_5fbdf6
+  ------  after 10-04 20:45  A + GQA + KV cache + deep-thin d576/L23, 600M (zip 20:44)  0.8314
+          submission_20261004_204454_d576_L23_T1024_v35k_fbb29e   (final Phase 1 run)
+
+  Architecture ranking (200M budget): A 0.8281 > D 0.8270 > C 0.8261 > B 0.8227
+  Decoding settings for ALL six scored submissions: temp 0.8, top_k 50, top_p 0.95,
+  repetition_penalty 1.1 (window 256). max_new_tokens 320 for the first one, 512 for the rest
+  (only affects outputs that would otherwise be shorter than 128 words).
+  Never uploaded: d640 / 450M (zip 2026-10-02 14:31, folder since removed) and d768 / 600M with
+  temp 0.6, top_k 25, top_p 0.9, rep 1.5 (zip 2026-10-03 01:21).
+
+  Current best Phase 1 model: d768_L12_T1024_v35k_5fbdf6 (140.15M params, 600M tokens, val 1.928)
+  -> Codabench 0.8321 (+0.0040 over the 200M d560 model, identical decoding).
+
+
+------------------------------------------------------------------------------------------
+3. ARCHITECTURAL CHANGES TO THE DECODER-ONLY MODEL (and why)
+------------------------------------------------------------------------------------------
+Where: a separate notebook, Phase1_A_DecoderOnly_GQA_KVCache.ipynb (GQA on with n_kv_head=4,
+KV cache on; run/submission folders "A_decoder_only_gqa"). Phase1_A_DecoderOnly.ipynb was reverted
+to the original architecture (standard multi-head attention, no KV cache) and is the baseline.
+
+3.1 Grouped-query attention (GQA)   [config: n_kv_head=4 in the GQA notebook]
+  What: instead of every attention head having its own keys/values, groups of query heads
+        share one key/value head (e.g. 12 query heads sharing 4 K/V heads).
+  Why:  - fewer parameters and a smaller KV cache -> less memory and faster generation
+        - usually almost no quality loss; used in LLaMA 2 (70B) / LLaMA 3 and Mistral
+        - moves the model from LLaMA-1 style to LLaMA-2/3 style; a clean experiment for the report
+  Params (d768, 12 layers, 12 heads): MHA 140.15M | n_kv_head=6 133.07M | 4 130.71M | 2 128.35M
+  n_kv_head must divide n_head (12 -> 1, 2, 3, 4 or 6). Enabling it needs a new training run.
+  With n_kv_head removed, weights have the same names/shapes as the original model (old checkpoints load).
+
+3.2 KV cache for generation   [config: use_kv_cache=True in the GQA notebook]
+  What: the prompt is processed once and the keys/values of every position are stored;
+        each new token then goes through the model alone instead of re-reading the whole context.
+  Why:  - generation was the bottleneck: ~2 h for the 1,000 test prompts with the 140M model
+        - measured on the trained 140M model: 16 prompts x 200 tokens 82.3 s -> 2.2 s
+          (old time partly inflated by GPU memory pressure)
+        - fast generation makes decoding-setting sweeps practical, and BERTScore depends
+          heavily on decoding settings (observation 3)
+  Same output: cached and uncached generation give identical tokens in fp32; in bf16 82% of
+  greedy tokens matched (rounding flips near-ties, after which the text diverges).
+  If generation exceeds the 1024-token window, the cache is rebuilt from the latest 768 tokens.
+  Does not change the run id (generation setting).
+
+3.3 Deeper and thinner shape   [GQA notebook, set 2026-10-04 - final Phase 1 run]
+  What: d_model 768 -> 576, layers 12 -> 23, query heads 12 -> 9, K/V heads 4 -> 3 (head_dim 64).
+        Same parameter budget: 132.11M vs 130.71M for d768/L12 with GQA (140.15M without GQA).
+        Run id: d576_L23_T1024_v35k_fbb29e; 600M tokens (same corpus/mix as the best model).
+  Why:  MobileLLM (Meta, 2024) found that sub-billion-parameter LMs do better deep-and-thin than
+        shallow-and-wide at equal size; its recipe (SwiGLU, deep-thin, shared embeddings, GQA) matches
+        this model. Exact head setup of MobileLLM-125M: d576, 9 query heads, 3 K/V heads.
+  Expected: roughly the same compute per token, ~1.4x the activation memory (layers x width
+        13,248 vs 9,216) and somewhat lower tokens/s (more, smaller layers) -> estimated 8-10 h.
+  Note: compared with the best model (d768, MHA, 600M) this changes TWO things (GQA and shape),
+        so any score difference cannot be attributed to one of them alone.
+  Outcome (2026-10-04):
+                       d768/L12 MHA (best)      d576/L23 GQA + KV cache (final)
+    parameters         140.15M                  132.11M  (-6%)
+    best val loss      1.928 (ppl 6.88)         1.936 (ppl 6.93)
+    training time      434 min                  515 min  (+19%; ~18-21k vs ~20-22k tok/s)
+    test generation    ~130 s / 16 prompts      ~4 s / 16 prompts (KV cache)
+    Codabench          0.8321                   0.8314  (-0.0007)
+    short outputs      4 / 1000                 1 / 1000 (a runaway statute-number chain)
+  -> Effectively a tie at 6% fewer parameters: both gaps are within noise (observations 12, 13).
+     The MobileLLM-style deep-thin gain did not appear at this scale; it did not hurt either.
+     The cost was 19% longer training (more sequential layers). The KV cache cut generation
+     from ~2 h to minutes.
+
+
+------------------------------------------------------------------------------------------
+4. OBSERVATIONS
+------------------------------------------------------------------------------------------
+1. Learning signal per token decides the winner on a fixed budget.
+   A and D learn from every token; C only from the continuation part (~45%); B only from 256 of
+   every 1024 tokens read (25%). A wins: it practises "continue the text" on every token.
+
+2. Long-context efficiency does not help this task.
+   Prompt + continuation is only ~800 tokens, which fits A's 1024 window. D pays the cost
+   (6 of 8 layers see only the last 256 tokens) without the benefit: val 2.83 vs A 2.57.
+
+3. More data + a bigger model DID raise the Codabench BERTScore - but only slightly.   [key observation]
+   Controlled comparison (identical decoding: temp 0.8, top_k 50, top_p 0.95, rep 1.1):
+     d560 / 200M tokens / 58M params:   val loss 2.571 (ppl 13.1)  ->  Codabench 0.8281
+     d768 / 600M tokens / 140M params:  val loss 1.928 (ppl 6.9)   ->  Codabench 0.8321  (+0.0040)
+   (model size, vocabulary 32k -> 35k and token count changed together, so the gain cannot be split
+   between data and size.)
+   The earlier impression that "600M did not beat 0.8281" is NOT supported: that 600M version
+   (temp 0.6, top_k 25, top_p 0.9, rep 1.5) was never uploaded, so it was never scored.
+   Perplexity halved (13.1 -> 6.9) but BERTScore moved by only 0.004 -> the metric is compressed
+   (see observation 12). Hypotheses for why decoding/metric matter so much:
+   (a) repetition_penalty 1.5 over a 256-token window suppresses the prompt's own legal terms
+       (appellant, section, the said Act...) that the true continuation reuses -> lowers BERTScore
+   (b) BERTScore ceiling: the real next 128 words are largely unpredictable; a better LM mainly
+       wins on the first words and on style, and BERTScore rates any fluent on-topic legal text highly
+   2 x 2 check {200M, 600M} x {old settings, new settings}: the old-settings row is now done on
+   Codabench (0.8281 vs 0.8321). Still open: the new-settings column (to measure hypothesis (a)).
+
+4. The acts source holds only ~150M training tokens in total.
+   Asking for 40% of 500M (200M) exhausted it: the corpus came out at 450M with an effective mix of
+   ~33/44/11/11. The data builder now passes a source's unfilled share to the other sources.
+
+5. Training and validation loss stay close (d768: 2.00 vs 1.96) -> no overfitting.
+   Single pass over the data; dropout (0.0) would only slow learning. More data still helps:
+   val loss was still falling at the end of every run.
+
+6. Degenerate repetition loops in some outputs.
+   e.g. "L.P.(C) L.P.(C) ..." and "** ** **": 2 of 1000 first-submission outputs were short (min 66
+   words) because loops use many tokens per word. Fix: max_new_tokens 320 -> 512.
+   Measured with our tokenizer: 128 words ~ 156 tokens on average (max ~300 seen), fertility ~1.2 tok/word.
+
+7. Glued words ("ofthe", "tenantin") are not a real problem.
+   Unknown-word rate: generations 4.5% vs real continuations 7.0%; some odd words come from the
+   source documents themselves.
+
+8. GPU memory limit on Windows fails silently.
+   When a run needs more than 12 GB, Windows spills into system RAM instead of raising out-of-memory:
+   - D with micro_batch 8 at block 2048 needed 16.2 GiB -> 238 tok/s (vs ~23k at micro_batch 4)
+   - d768 at block 2048, micro_batch 8 -> fewer than 20 steps in 85 min
+   Fix: smaller micro_batch with larger grad_accum (same tokens per step). Rule: watch tok/s.
+
+9. Measured memory / speed (bf16, one training step):
+   A 58M mb8: 8.5 GiB, ~25k tok/s | B mb8: 3.6 GiB, ~73k tok/s | C mb8: 8.5 GiB, ~25k tok/s
+   D mb4: 8.5 GiB, ~23k tok/s | d768 L12 at block 1024: mb8 10.2 GiB, mb4 6.1 GiB (~20-22k tok/s)
+
+10. GPU driver resets: "CUDA error: unknown error" (sticky).
+    The NVIDIA driver logged faults (events 153/14) mid-generation; the kernel cannot use the GPU
+    afterwards -> restart kernel and Run All (finished training is skipped automatically).
+
+11. Generation after training was slow because the kernel still held training memory.
+    Restarting the kernel before generation-only runs frees the GPU.
+
+12. BERTScore barely separates the architectures.
+    Val loss ranges 2.57 (A) to 3.07 (B), but Codabench BERTScore only 0.8227 to 0.8281 (spread 0.0054).
+    Ranking by val loss:   A 2.571 < C 2.775 < D 2.830 < B 3.066
+    Ranking by BERTScore:  A 0.8281 > D 0.8270 > C 0.8261 > B 0.8227
+    Both agree on the extremes (A best, B worst); C and D swap places. Their gap (0.0009) is tiny and
+    may be within sampling noise (outputs are sampled at temperature 0.8), and C's loss is measured only on
+    continuation tokens, so the C-vs-D loss comparison is not like-for-like anyway.
+    Supports hypothesis 3(b): BERTScore rates any fluent, on-topic legal continuation highly,
+    so large modelling gains translate into small score changes.
+
+
+13. Deep-thin + GQA tied the best model (final run, 2026-10-04).
+    d576/L23 GQA (132.11M): val 1.936, Codabench 0.8314 vs d768/L12 MHA (140.15M): val 1.928, 0.8321.
+    6% fewer parameters for no measurable loss; 19% slower training; much faster generation.
+
+14. Single validation readings are noisy (about +-0.05).
+    Each eval averages only eval_iters x micro_batch = 50 x 4 = 200 random 1024-token windows.
+    In the final run val read 2.043 at step 9000 and 1.972 at step 9155 with the LR almost flat.
+    Consequences: (a) val differences below ~0.05 between runs are not meaningful (e.g. 1.928 vs 1.936);
+    (b) "best" checkpoints are partly chosen by a lucky reading. For final comparisons, evaluate
+    on more windows (larger eval_iters) or on the full validation set.
+
+------------------------------------------------------------------------------------------
+5. NOTEBOOK / PIPELINE CHANGES (beyond the model classes)
+------------------------------------------------------------------------------------------
+- Data mix changed from 25/25/25/25 to 35/35/15/15 (more acts + Supreme Court); mix must sum to 1.
+- Run folders per config: runs\<arch>\<run id>, e.g. d768_L12_T1024_v35k_5fbdf6
+  (size tag + hash of training-relevant settings). Changing the config starts a new run;
+  generation/logging settings do not. Old runs were moved into this layout.
+- Resume guard: a checkpoint from a different model/tokenizer is ignored instead of crashing.
+- Fixed resume bug: RNG states must be restored as CPU tensors.
+- Submissions: Phase1\submissions\<arch>\submission_<time>_<run id>\ (zip + prediction + gen_config).
+- max_new_tokens 320 -> 512; D micro_batch 8 -> 4 (grad_accum 16).
+- Total-parameter cell after model creation (checks the 50M-300M rule).
+- Smoke tests use separate *_smoke folders (never touch real checkpoints).
+- Windows fixes: no fork (serial tokenization), UTF-8 file I/O, JSON format detection fix,
+  real Kaggle detection, work dir C:\kaggle\working\cs781 (outside OneDrive).
+- Markdown kept minimal.
+- New notebook Phase1_A_DecoderOnly_GQA_KVCache.ipynb (copy of A + GQA + KV cache, own run name);
+  Phase1_A_DecoderOnly.ipynb reverted to the original architecture (2026-10-03).
+
+
+------------------------------------------------------------------------------------------
+COURSE DOCUMENT UPDATE (version of 2026-10-03) - what changed
+------------------------------------------------------------------------------------------
+- Minimum 4 valid submissions for EVERY phase (1-7); extra points for more (max 40/phase, 10/day).
+  Phase 1 already has 4 valid submissions.
+- Phases 2-7: at least 4 substantially different experiments (>= 3 different fine-tuning / PEFT
+  techniques; LoRMA compulsory; knowledge distillation mandatory). Previously 6 (5 techniques).
+- Phases 2-6: must experiment with ALL FOUR Phase 1 architectures (A, B, C, D) - fine-tuning only
+  one model is not sufficient. -> keep every architecture's model_final.pt.
+- Explicit ban on external legal corpora removed (other pretrained models/weights and external
+  LLM APIs still banned).
+- New LLM-use section (17.5). TA and professor confirmed AI use is fine for this project
+  (2026-10-03). The LLM Declaration is still mandatory: model code (all four architectures, GQA,
+  KV cache), pipeline fixes, hyperparameter suggestions and the analysis in this file were
+  AI-assisted (Claude).
+
+------------------------------------------------------------------------------------------
+6. NEXT STEPS
+------------------------------------------------------------------------------------------
+- Finish the 2 x 2 (observation 3): score the d768 model with temp 0.6 / top_k 25 / top_p 0.9 / rep 1.5
+  (zip from 2026-10-03 01:21 already exists - upload it), then try rep 1.1-1.2 with window 64.
+- Decoding sweep on the d768 model: repetition_penalty 1.1-1.2 with window 64,
+  temperature {0.5, 0.6, 0.7} x top_p {0.85, 0.9}.
+- DONE 2026-10-04: final Phase 1 run (d576/L23 GQA + KV cache, 600M) -> Codabench 0.8314 (see 3.3).
+- Phases 2-7: start from model_final.pt; consider full (bidirectional) attention when fine-tuning
+  for labelling tasks; plan chunking for documents longer than 1024 tokens.

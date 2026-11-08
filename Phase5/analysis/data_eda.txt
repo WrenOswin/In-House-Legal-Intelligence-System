@@ -1,0 +1,56 @@
+== train: 42750 docs, keys [(('id', 'labels', 'text'), 42750)]
+  unique ids 42750  empty text 0
+  words {0.1: 90, 0.5: 430, 0.9: 2766, 0.99: 8143, 'max': 86858, 'mean': 1124.2}
+  labels/doc {0.1: 1, 0.5: 3, 0.9: 7, 0.99: 12, 'max': 31, 'mean': 3.7}  zero-label docs 0  dup labels in doc 3
+  label types Counter({'int': 158398})
+  labels/doc dist [(1, 9146), (2, 7585), (3, 7045), (4, 5782), (5, 4265), (6, 3283), (7, 2131), (8, 1390), (9, 836), (10, 458), (11, 358), (12, 167)]
+  sample text: '(a), <SECTION> of the <ACT>. The gist of theprosecution case relevant <ENTITY> the purpose of this proceedingmay be stated thus: With the growth of industry, commerceand trade in and around the city of Mumbai which generatessubstantial quantity of wealth, there has been increase oforganised activiti'
+  <ENTITY> per doc mean 55.9  lowercase-only docs 6
+== dev: 10181 docs, keys [(('id', 'labels', 'text'), 10181)]
+  unique ids 10181  empty text 0
+  words {0.1: 90, 0.5: 543, 0.9: 2957, 0.99: 8856, 'max': 69230, 'mean': 1248.5}
+  labels/doc {0.1: 1, 0.5: 3, 0.9: 7, 0.99: 12, 'max': 28, 'mean': 3.9}  zero-label docs 0  dup labels in doc 1
+  label types Counter({'int': 39870})
+  labels/doc dist [(1, 1544), (2, 1904), (3, 1817), (4, 1536), (5, 1147), (6, 837), (7, 519), (8, 310), (9, 227), (10, 133), (11, 69), (12, 54)]
+  sample text: 'Dr. <ENTITY>, J. The accused persons are the <ENTITY> andbrother respectively of the deceased. The incident purportedly took place on 3.1.1990.Though the prosecution relied on the evidence of many persons who supposedly witnessedthe occurrence, while deposing in Court, most of them resiled from the '
+  <ENTITY> per doc mean 61.7  lowercase-only docs 0
+== test: 13019 docs, keys [(('id', 'text'), 13019)]
+  unique ids 13019  empty text 0
+  words {0.1: 94, 0.5: 532, 0.9: 2813, 0.99: 8308, 'max': 134848, 'mean': 1211.7}
+  sample text: '2.Prosecution case in brief was that <ENTITY>, daughter of informant <ENTITY> (PW-1) was married to <ENTITY> 5 years ago. After marriage <ENTITY> was treated with cruelty by her husband <ENTITY>, <ENTITY>-in-law <ENTITY> and mother-in-law <ENTITY> <ENTITY> demand of dowry. For this reason these thre'
+  <ENTITY> per doc mean 60.6  lowercase-only docs 1
+
+== labels: train 100 dev 100 union 100 range 0 99
+  in dev not train []  in train not dev [] 0
+  missing ids in range []
+  train freq top20 [(5, 11731), (34, 10380), (97, 7881), (43, 7728), (39, 7121), (12, 4324), (13, 4136), (10, 4134), (77, 4046), (94, 3835), (14, 3818), (61, 3724), (44, 3660), (51, 3184), (35, 3157), (30, 3009), (45, 2618), (46, 2510), (71, 2303), (54, 2205)]
+  train freq bottom20 [(32, 385), (49, 380), (95, 376), (2, 367), (86, 363), (60, 358), (65, 351), (8, 349), (0, 343), (4, 341), (15, 336), (27, 329), (74, 319), (50, 318), (59, 310), (92, 309), (66, 309), (23, 304), (25, 287), (84, 272)]
+  labels with <= 1 train docs: 0
+  labels with <= 2 train docs: 0
+  labels with <= 5 train docs: 0
+  labels with <= 10 train docs: 0
+  labels with <= 20 train docs: 0
+  labels with <= 50 train docs: 0
+  labels with <= 100 train docs: 0
+  labels with <= 500 train docs: 30
+  share of label mass in top 10 / top 20: 0.412 0.603
+  dev freq per label (sorted by train freq): [(5, 11731, 2936), (34, 10380, 2596), (97, 7881, 1972), (43, 7728, 1932), (39, 7121, 1779), (12, 4324, 1086), (13, 4136, 1033), (10, 4134, 1033), (77, 4046, 1015), (94, 3835, 960), (14, 3818, 954), (61, 3724, 932), (44, 3660, 922), (51, 3184, 796), (35, 3157, 790), (30, 3009, 405), (45, 2618, 707), (46, 2510, 666), (71, 2303, 577), (54, 2205, 552), (89, 2113, 563), (90, 2066, 529), (96, 1973, 606), (26, 1909, 478), (55, 1787, 447), (78, 1739, 453), (38, 1713, 425), (88, 1661, 417), (63, 1658, 414), (85, 1549, 391), (33, 1483, 371), (58, 1431, 358), (70, 1360, 348), (91, 1327, 348), (81, 1321, 346), (53, 1276, 363), (37, 1269, 318), (31, 1138, 302), (67, 1093, 273), (52, 1084, 272), (7, 1037, 260), (1, 1035, 258), (72, 1031, 259), (83, 980, 252), (47, 879, 228), (17, 831, 208), (9, 823, 206), (41, 821, 205), (6, 698, 174), (21, 684, 172), (99, 674, 176), (16, 665, 170), (69, 642, 162), (64, 632, 159), (68, 629, 157), (11, 615, 232), (87, 607, 160), (82, 604, 156), (28, 602, 151), (73, 591, 149), (48, 585, 145), (80, 573, 141), (36, 569, 142), (42, 566, 142), (93, 564, 141), (56, 558, 139), (40, 543, 152), (76, 530, 142), (22, 528, 132), (19, 523, 131), (29, 497, 125), (98, 491, 123), (20, 487, 122), (75, 485, 132), (62, 474, 118), (24, 469, 118), (3, 453, 113), (79, 436, 116), (57, 434, 115), (18, 393, 100), (32, 385, 99), (49, 380, 95), (95, 376, 93), (2, 367, 98), (86, 363, 92), (60, 358, 90), (65, 351, 105), (8, 349, 92), (0, 343, 86), (4, 341, 84), (15, 336, 84), (27, 329, 83), (74, 319, 80), (50, 318, 80), (59, 310, 86), (92, 309, 77), (66, 309, 78), (23, 304, 80), (25, 287, 72), (84, 272, 68)]
+  top co-occurring pairs [((5, 34), 3644), ((12, 13), 3511), ((43, 97), 3385), ((5, 43), 3271), ((13, 14), 2831), ((5, 39), 2828), ((12, 14), 2672), ((34, 39), 2596), ((5, 97), 2424), ((34, 35), 2174), ((30, 43), 2148), ((39, 43), 2070), ((13, 39), 2066), ((13, 34), 2029), ((12, 39), 1989)]
+  distinct label sets 16191  top sets [((34,), 909), ((5,), 796), ((61,), 453), ((5, 34), 425), ((39,), 359), ((20, 28), 342), ((10,), 321), ((54,), 311), ((77,), 290), ((94,), 271)]
+
+== overlap
+  train-dev: shared ids 0, identical (normalised) texts 81
+  train-test: shared ids 0, identical (normalised) texts 109
+  dev-test: shared ids 0, identical (normalised) texts 62
+  dup texts within train: 435
+  dup texts within dev: 63
+  dup texts within test: 80
+  train-dev exact dups with same labels 41 / 118
+  train-test: same first+last 300 chars 220
+  dev-test: same first+last 300 chars 132
+  train-dev: same first+last 300 chars 173
+  test sample near-dups (>80% 8-gram containment) in train+dev: 40 / 1000
+
+== statute mentions: docs (of 2000) mentioning "Section N", top [('302', 13), ('313', 7), ('34', 7), ('307', 5), ('148', 4), ('3', 4), ('7', 3), ('161', 3), ('4', 3), ('304', 3), ('482', 2), ('326', 2), ('27', 2), ('337', 2), ('120', 2)]
+  docs with any "section" mention 1795 / 2000
+  docs with "<STATUTE>"-style masks: [('<ENTITY>', 1987), ('<ACT>', 1795), ('<SECTION>', 1793)]
